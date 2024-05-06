@@ -1,4 +1,4 @@
-function Add-HomepsickCastle {
+function New-HomepsickCastle {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true, ParameterSetName="Clone")]
