@@ -49,6 +49,10 @@ function Enable-HomepsickCastle {
             Write-Host "Linking $linkPath to $targetPath. ($relativePath)"
             if (-not (Test-Path -PathType Leaf -Path $linkPath))
             {
+                if (-not (Test-Path -Path (Split-Path -Parent $linkPath) -PathType Container))
+                {
+                    New-Item -ItemType Directory -Path (Split-Path -Parent $linkPath)
+                }
                 New-Item -ItemType SymbolicLink -Path $linkPath -Value $targetPath
             }
             else
@@ -56,6 +60,10 @@ function Enable-HomepsickCastle {
                 if ($Force)
                 {
                     Remove-Item -Force $linkPath
+                    if (-not (Test-Path -Path (Split-Path -Parent $linkPath) -PathType Container))
+                    {
+                        New-Item -ItemType Directory -Path (Split-Path -Parent $linkPath)
+                    }
                     New-Item -ItemType SymbolicLink -Path $linkPath -Value $targetPath
                 }
                 else
