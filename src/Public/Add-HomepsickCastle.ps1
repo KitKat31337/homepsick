@@ -1,4 +1,4 @@
-function Add-HomepshickCastle {
+function Add-HomepsickCastle {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true, ParameterSetName="Clone")]
@@ -14,10 +14,15 @@ function Add-HomepshickCastle {
         Throw "git is not installed."
     }
 
-    $castlePath = [IO.Path]::Combine((Get-HomePath), '.homesick', 'repos', $castleName)
+    if($Clone)
+    {
+        $CastleName = (Split-Path -LeafBase $GitUrl)
+    }
+
+    $castlePath = [IO.Path]::Combine((Get-HomepsisckPath -Repos), $CastleName)
     if (Test-Path $castlePath)
     {
-        Throw "Castle $castleName already exists."
+        Throw "Castle $CastleName already exists."
     }
 
     New-Item -ItemType Directory -Path $castlePath
