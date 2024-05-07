@@ -14,7 +14,7 @@ function Enable-HomepsickCastle {
     $castles = @()
     if (-not $all)
     {
-        $castlePath = [IO.Path]::Combine((Get-HomepsisckPath -Repos), $castleName)
+        $castlePath = [IO.Path]::Combine((Get-HomepsickPath -Repos), $castleName)
         if (-not (Test-Path $castlePath))
         {
             Throw "Castle $castleName does not exist."
@@ -23,7 +23,7 @@ function Enable-HomepsickCastle {
     }
     else
     {
-        $castles = @((Get-ChildItem -Path (Get-HomepsisckPath -Repos) -Directory -Exclude homepsick,homeshick) | Select-Object -ExpandProperty FullName)
+        $castles = @((Get-ChildItem -Path (Get-HomepsickPath -Repos) -Directory -Exclude homepsick,homeshick) | Select-Object -ExpandProperty FullName)
     }
     
     $castles | ForEach-Object {
