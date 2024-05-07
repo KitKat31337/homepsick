@@ -1,4 +1,4 @@
-function Get-HomepsisckPath {
+function Get-HomepsickPath {
     [CmdletBinding(DefaultParameterSetName="None")]
     [OutputType([string])]
     param(

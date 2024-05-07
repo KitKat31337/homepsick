@@ -19,17 +19,16 @@ function New-HomepsickCastle {
         $CastleName = (Split-Path -LeafBase $GitUrl)
     }
 
-    $castlePath = [IO.Path]::Combine((Get-HomepsisckPath -Repos), $CastleName)
-    if (Test-Path $castlePath)
+    $castle = [HomepsickCastle]::new($CastleName)
+    if (Test-Path $castle.CastlePath)
     {
         Throw "Castle $CastleName already exists."
     }
 
-    New-Item -ItemType Directory -Path $castlePath
-    Set-Location $castlePath
+    New-Item -ItemType Directory -Path $castle.CastlePath
     if (-not $Clone)
     {
-        git init
+        git -C "$($castle.CastlePath)" init
     }
     else
     {
@@ -39,7 +38,7 @@ function New-HomepsickCastle {
         }
         
         # Git Clone
-        $gitOut = (git clone $GitUrl . 2>&1)
+        $gitOut = (git -C "$($castle.CastlePath)" clone $GitUrl . 2>&1)
         
         if ($LASTEXITCODE -ne 0)
         {
@@ -48,7 +47,7 @@ function New-HomepsickCastle {
         }
 
         # Git Submodules Init
-        $gitOut = (git submodule update --init 2>&1)
+        $gitOut = (git -C "$($castle.CastlePath)" submodule update --init 2>&1)
         
         if ($LASTEXITCODE -ne 0)
         {
