@@ -1,0 +1,23 @@
+name: Test PowerShell module
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pester:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+      - name: Run tests
+        shell: pwsh
+        run: |
+          Import-Module Pester -RequiredVersion 5.7.1
+          $result = Invoke-Pester -Path ./tests -PassThru -Output Detailed
+          if ($result.FailedCount -gt 0) { exit 1 }

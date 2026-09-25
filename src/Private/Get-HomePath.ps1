@@ -3,10 +3,10 @@ function Get-HomePath {
     [OutputType([string])]
     param()
     
-    if ($env:HOME -ne $null) {
+    if (-not [string]::IsNullOrWhiteSpace($env:HOME)) {
         return $env:HOME
     }
     else {
-        return $env:USERPROFILE
+        return [Environment]::GetFolderPath('UserProfile')
     }
 }

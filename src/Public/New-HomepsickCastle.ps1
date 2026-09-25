@@ -1,58 +1,51 @@
 function New-HomepsickCastle {
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'Init', SupportsShouldProcess)]
+    [OutputType([HomepsickCastle])]
     param(
-        [Parameter(Mandatory=$true, ParameterSetName="Clone")]
-        [switch]$Clone,
-        [Parameter(Mandatory=$true, ParameterSetName="Clone")]
-        [string]$GitUrl,
-        [Parameter(Mandatory=$true, ParameterSetName="Init")]
-        [string]$CastleName
+        [Parameter(Mandatory, ParameterSetName = 'Clone')][switch]$Clone,
+        [Parameter(Mandatory, ParameterSetName = 'Clone')][string]$GitUrl,
+        [Parameter(Mandatory, ParameterSetName = 'Init')][string]$CastleName,
+        [Parameter(ParameterSetName = 'Clone')][switch]$Link,
+        [Parameter(ParameterSetName = 'Clone')][switch]$Batch
     )
 
-    if (-not (Test-PathCommand -command "git"))
-    {
-        Throw "git is not installed."
+    if (-not (Test-PathCommand -command 'git')) { throw 'git is not installed.' }
+    if ($Clone) {
+        # Work with HTTPS, local paths, and scp-style SSH URLs.
+        $source = $GitUrl.TrimEnd('/', '\') -replace '\.git$', ''
+        $CastleName = ($source -split '[:/\\]')[-1]
+        if (Test-GithubShorthand -stringToTest $GitUrl) {
+            $GitUrl = "https://github.com/$GitUrl.git"
+        }
     }
-
-    if($Clone)
-    {
-        $CastleName = (Split-Path -LeafBase $GitUrl)
-    }
-
     $castle = [HomepsickCastle]::new($CastleName)
-    if (Test-Path $castle.CastlePath)
-    {
-        Throw "Castle $CastleName already exists."
-    }
+    if (Test-HomepsickEntry -LiteralPath $castle.CastlePath) { throw "Castle '$CastleName' already exists." }
+    if (-not $PSCmdlet.ShouldProcess($castle.CastlePath, $(if ($Clone) { 'Clone castle' } else { 'Generate castle' }))) { return }
 
-    New-Item -ItemType Directory -Path $castle.CastlePath
-    if (-not $Clone)
-    {
-        git -C "$($castle.CastlePath)" init
-    }
-    else
-    {
-        if (Test-GithubShorthand -stringToTest $GitUrl)
-        {
-            $GitUrl = "https://github.com/${GitUrl}.git"
+    $repos = Get-HomepsickPath -Repos
+    New-Item -ItemType Directory -Path $repos -Force | Out-Null
+    if ($Clone) {
+        try {
+            Invoke-HomepsickGit -RepositoryPath $repos -Arguments @('clone', '--recursive', $GitUrl, $CastleName) | Out-Null
         }
-        
-        # Git Clone
-        $gitOut = (git -C "$($castle.CastlePath)" clone $GitUrl . 2>&1)
-        
-        if ($LASTEXITCODE -ne 0)
-        {
-            Remove-Item -Recurse -Force $castlePath
-            Throw "Failed to clone $GitUrl : $GitOut"
+        catch {
+            # Only remove a directory created by this failed clone.
+            if (Test-Path -LiteralPath $castle.CastlePath -PathType Container) {
+                Remove-Item -LiteralPath $castle.CastlePath -Recurse -Force
+            }
+            throw
         }
-
-        # Git Submodules Init
-        $gitOut = (git -C "$($castle.CastlePath)" submodule update --init 2>&1)
-        
-        if ($LASTEXITCODE -ne 0)
-        {
-            Remove-Item -Recurse -Force $castlePath
-            Throw "Failed to clone $GitUrl : $GitOut"
+        if ($Link) { Enable-HomepsickCastle -CastleName $CastleName -Batch:$Batch }
+        elseif (-not $Batch -and (Test-Path -LiteralPath $castle.CastleSymRoot -PathType Container)) {
+            if ($PSCmdlet.ShouldContinue("Link files from '$CastleName' into your home directory?", 'Link cloned castle')) {
+                Enable-HomepsickCastle -CastleName $CastleName
+            }
         }
     }
+    else {
+        New-Item -ItemType Directory -Path $castle.CastlePath | Out-Null
+        Invoke-HomepsickGit -RepositoryPath $castle.CastlePath -Arguments @('init') | Out-Null
+        New-Item -ItemType Directory -Path $castle.CastleSymRoot | Out-Null
+    }
+    return $castle
 }

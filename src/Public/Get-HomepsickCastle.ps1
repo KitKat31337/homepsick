@@ -1,26 +1,15 @@
-function Get-HomepsickCastle
-{
+function Get-HomepsickCastle {
     [CmdletBinding()]
-    [OutputType([HomepsickCastle[]])]
-    param
-    (
-        [Parameter(Mandatory=$false)]
-        [string]$CastleName
-    )
+    [OutputType([HomepsickCastle])]
+    param([string]$CastleName)
 
-    if ($CastleName)
-    {
+    if ($PSBoundParameters.ContainsKey('CastleName')) {
         $castle = [HomepsickCastle]::new($CastleName)
-        if (-not ($castle.Exists()))
-        {
-            Throw "Castle $castleName does not exist."
-        }
-        return @($castle)
+        if (-not $castle.Exists()) { throw "Castle '$CastleName' does not exist." }
+        return $castle
     }
-    else
-    {
-        [HomepsickCastle[]] $castles = @()
-        ((Get-ChildItem -Path (Get-HomepsickPath -Repos) -Directory) | Select-Object -ExpandProperty Name) | ForEach-Object -Process { $castles += [HomepsickCastle]::new($_) }
-        return $castles
+
+    foreach ($name in @(Get-HomepsickNames)) {
+        [HomepsickCastle]::new($name)
     }
 }
