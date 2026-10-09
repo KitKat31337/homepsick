@@ -1,38 +1,45 @@
 class HomepsickCastle {
-    # Default Constructor
-    HomepsickCastle () { throw 'HomepsickCastle must be created using the HomepsickCastle([string]$CastleName) constructor.' }
+    [string]$CastleName
+    [string]$CastlePath
+    [string]$CastleSymRoot
 
-    # Common Constructor
+    HomepsickCastle() { throw 'A castle name is required.' }
+
     HomepsickCastle([string]$CastleName) {
+        if ([string]::IsNullOrWhiteSpace($CastleName) -or
+            $CastleName -in @('.', '..') -or
+            $CastleName.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
+            $CastleName.Contains('/') -or $CastleName.Contains('\')) {
+            throw "Invalid castle name: '$CastleName'."
+        }
         $this.CastleName = $CastleName
         $this.CastlePath = [IO.Path]::Combine((Get-HomepsickPath -Repos), $CastleName)
         $this.CastleSymRoot = [IO.Path]::Combine($this.CastlePath, 'home')
     }
 
-    [string]$CastleName
-    [string]$CastlePath
-    [string]$CastleSymRoot
-
-    [System.IO.FileInfo[]] ItemsToLink() {
-        if ($this.Exists()) { return (Get-ChildItem -Path $this.CastleSymRoot -Recurse -File -Force) }
-        else { return $null }
+    [object[]] ItemsToLink() {
+        if (-not $this.Exists()) { return @() }
+        return @(Get-HomepsickTrackedFile -RepositoryPath $this.CastlePath)
     }
+
     [string] GitOrigin() {
-        if ($this.Exists()) { return (git config --file ([IO.Path]::Combine($this.CastlePath, '.git', 'config')) --get remote.origin.url) }
-        else { return $null }
+        if (-not $this.Exists()) { return '' }
+        $result = Invoke-HomepsickGit -RepositoryPath $this.CastlePath -Arguments @('config', '--get', 'remote.origin.url') -AllowFailure
+        return $result.Output.Trim()
     }
 
     [bool] Exists() {
-        return (Test-Path -Path $this.CastlePath -PathType Container)
+        return (Test-Path -LiteralPath $this.CastlePath -PathType Container)
     }
 
     [void] Update() {
-        # Git Pull
-        Write-Host "Pulling Castle - $($this.CastleName)"
-        $gitOut = (git -C $($this.CastlePath) pull 2>&1)
-        if ($LASTEXITCODE -ne 0)
-        {
-            Write-Host "Failed to pull $($this.CastleName) : $GitOut"
-        }        
-    } 
+        if (-not $this.Exists()) { throw "Castle '$($this.CastleName)' does not exist." }
+        $upstream = Invoke-HomepsickGit -RepositoryPath $this.CastlePath -Arguments @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}') -AllowFailure
+        if ($upstream.ExitCode -ne 0) {
+            Write-Verbose "Castle '$($this.CastleName)' has no upstream; skipping pull."
+            return
+        }
+        Invoke-HomepsickGit -RepositoryPath $this.CastlePath -Arguments @('pull') | Out-Null
+        Invoke-HomepsickGit -RepositoryPath $this.CastlePath -Arguments @('submodule', 'update', '--init', '--recursive') | Out-Null
+    }
 }

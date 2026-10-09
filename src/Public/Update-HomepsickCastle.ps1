@@ -1,21 +1,27 @@
 function Update-HomepsickCastle {
-    [CmdletBinding(DefaultParameterSetName = 'NoParams')]
-    param (
-        [Parameter(Mandatory = $false, ParameterSetName = 'ByCastleName')]
-        [string]$CastleName,
-        [Parameter(Mandatory = $false, ParameterSetName = 'All')]
-        [switch]$All
+    <# .SYNOPSIS Pulls castle updates and initializes nested submodules. #>
+    [CmdletBinding(DefaultParameterSetName = 'All')]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'Single')][string]$CastleName,
+        [Parameter(ParameterSetName = 'All')][switch]$All,
+        [switch]$Link,
+        [switch]$Batch
     )
 
-    if ($CastleName) {
-        $castle = Get-HomepsickCastle -CastleName $CastleName
+    $names = if ($PSCmdlet.ParameterSetName -eq 'Single') { @($CastleName) } else { @(Get-HomepsickNames) }
+    foreach ($name in $names) {
+        $castle = Get-HomepsickCastle -CastleName $name
+        $before = (Invoke-HomepsickGit -RepositoryPath $castle.CastlePath -Arguments @('rev-parse', 'HEAD') -AllowFailure).Output.Trim()
         $castle.Update()
-    }
-    else {
-        $castles = Get-HomepsickCastle
-        $castles | ForEach-Object {
-            $castle = $_
-            $castle.Update()
+        $after = (Invoke-HomepsickGit -RepositoryPath $castle.CastlePath -Arguments @('rev-parse', 'HEAD') -AllowFailure).Output.Trim()
+        $newFiles = if ($before -and $after -and $before -ne $after) {
+            (Invoke-HomepsickGit -RepositoryPath $castle.CastlePath -Arguments @('diff', '--name-only', '--diff-filter=AR', $before, $after, '--', 'home')).Output
+        }
+        if ($newFiles -and (Test-Path -LiteralPath $castle.CastleSymRoot -PathType Container)) {
+            if ($Link) { Enable-HomepsickCastle -CastleName $name -Batch:$Batch }
+            elseif (-not $Batch -and $PSCmdlet.ShouldContinue("Link new files from '$name'?", 'Castle updated')) {
+                Enable-HomepsickCastle -CastleName $name
+            }
         }
     }
 }

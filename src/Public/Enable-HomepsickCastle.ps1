@@ -1,92 +1,50 @@
 function Enable-HomepsickCastle {
-    [CmdletBinding(DefaultParameterSetName="None")]
+    <# .SYNOPSIS Links Git-tracked castle files into the home directory. #>
+    [CmdletBinding(DefaultParameterSetName = 'All', SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
-        [Parameter(Mandatory=$true, ParameterSetName="Single")]
-        [string]$CastleName,
-        [Parameter(Mandatory=$true, ParameterSetName="All")]
-        [switch]$All,
-        [Parameter(Mandatory=$false, ParameterSetName="Single")]
-        [Parameter(Mandatory=$false, ParameterSetName="All")]
-        [Parameter(Mandatory=$false, ParameterSetName="None")]
-        [switch]$Force
+        [Parameter(Mandatory, ParameterSetName = 'Single')][string]$CastleName,
+        [Parameter(ParameterSetName = 'All')][switch]$All,
+        [switch]$Force,
+        [switch]$Skip,
+        [switch]$Batch
     )
 
-    $castles = @()
-    if (-not $all)
-    {
-        $castlePath = [IO.Path]::Combine((Get-HomepsickPath -Repos), $castleName)
-        if (-not (Test-Path $castlePath))
-        {
-            Throw "Castle $castleName does not exist."
+    $names = if ($PSCmdlet.ParameterSetName -eq 'Single') { @($CastleName) } else { @(Get-HomepsickNames) }
+    $homePath = Get-HomePath
+    foreach ($name in $names) {
+        $castle = Get-HomepsickCastle -CastleName $name
+        if (-not (Test-Path -LiteralPath $castle.CastleSymRoot -PathType Container)) {
+            Write-Verbose "Castle '$name' has no home directory."
+            continue
         }
-        $castles = @($castlePath)
-    }
-    else
-    {
-        $castles = @((Get-ChildItem -Path (Get-HomepsickPath -Repos) -Directory -Exclude homepsick,homeshick) | Select-Object -ExpandProperty FullName)
-    }
-    
-    $castles | ForEach-Object {
-        $castle = $_
-        $castleName = [IO.Path]::GetFileName($castle)
-        if (-not (Test-Path -PathType Container -Path ([IO.Path]::Combine($castle, 'home'))))
-        {
-            Throw "Castle $castleName does not have a home directory."
-        }
-        $CastleSymRoot = [IO.Path]::Combine($castle, 'home')
-        $homeRoot = Get-HomePath
-        $itemsToLink = Get-ChildItem -Path $CastleSymRoot -Recurse -File -Force
 
-        $itemsToLink | ForEach-Object {
-            $item = $_
-            $relativePath = $item.FullName.Substring($CastleSymRoot.Length + 1)
-            $linkPath = [IO.Path]::Combine($homeRoot, $relativePath)
-            $targetPath = $item.FullName.Substring($homeRoot.Length + 1)
-            for ($i = 0; $i -lt ($relativePath.Split("\/".ToCharArray())).Count -1; $i++)
-            {
-                $targetPath = [IO.Path]::Combine('..', $targetPath)
-            }
-            Write-Host "Linking $linkPath to $targetPath. ($relativePath)"
-            if (-not (Test-Path -PathType Leaf -Path $linkPath))
-            {
-                if (-not (Test-Path -Path (Split-Path -Parent $linkPath) -PathType Container))
-                {
-                    New-Item -ItemType Directory -Path (Split-Path -Parent $linkPath)
+        foreach ($file in @(Get-HomepsickTrackedFile -RepositoryPath $castle.CastlePath)) {
+            $link = Join-Path $homePath $file.RelativePath
+            $parent = Split-Path -Parent $link
+            $target = [IO.Path]::GetRelativePath($parent, $file.SourcePath)
+            if (Test-HomepsickEntry -LiteralPath $link) {
+                $existing = Get-Item -LiteralPath $link -Force
+                $existingTarget = if ($existing.LinkType -eq 'SymbolicLink') { @($existing.Target)[0] } else { $null }
+                if ($existingTarget -and
+                    [IO.Path]::GetFullPath([IO.Path]::Combine($parent, $existingTarget)) -eq $file.SourcePath) {
+                    Write-Verbose "Already linked: $link"
+                    continue
                 }
-                New-Item -ItemType SymbolicLink -Path $linkPath -Value $targetPath
-            }
-            else
-            {
-                if ($Force)
-                {
-                    Remove-Item -Force $linkPath
-                    if (-not (Test-Path -Path (Split-Path -Parent $linkPath) -PathType Container))
-                    {
-                        New-Item -ItemType Directory -Path (Split-Path -Parent $linkPath)
-                    }
-                    New-Item -ItemType SymbolicLink -Path $linkPath -Value $targetPath
+                if ($Skip -or ($Batch -and -not $Force)) {
+                    Write-Verbose "Skipping existing path: $link"
+                    continue
                 }
-                else
-                {
-                    $file = Get-Item -Path $linkPath -Force
-                    if ($file.LinkType -ne 'SymbolicLink')
-                    {
-                        Write-Host "Skipping $linkPath. File already exists."
-                    }
-                    elseif ($file.Target -eq $targetPath)
-                    {
-                        Write-Host "Skipping $linkPath. Symbolic link already exists."
-                    }
-                    elseif ($file.Target -ne $targetPath)
-                    {
-                        Write-Host "Skipping $linkPath. Symbolic link exists but points to a different target."
-                    }
-                    else
-                    {
-                        Write-Host "Skipping $linkPath. File already exists."
-                    }
+                if (-not $Force -and -not $PSCmdlet.ShouldContinue("Replace existing path '$link'?", 'Castle link conflict')) {
+                    continue
                 }
+                if (-not $PSCmdlet.ShouldProcess($link, 'Replace with castle link')) { continue }
+                Remove-Item -LiteralPath $link -Force -Recurse
             }
+            elseif (-not $PSCmdlet.ShouldProcess($link, 'Create castle link')) { continue }
+
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            New-Item -ItemType SymbolicLink -Path $link -Target $target | Out-Null
+            Write-Verbose "Linked $link to $target"
         }
     }
 }
