@@ -7,7 +7,8 @@ function Invoke-HomepsickCastleRefresh {
         [ValidateRange(0, 36500)][int]$Days = 7,
         [switch]$Pull,
         [switch]$Batch,
-        [switch]$Link
+        [switch]$Link,
+        [switch]$AllowOutsideHome
     )
 
     $names = if ($PSCmdlet.ParameterSetName -eq 'Single') { @($CastleName) } else { @(Get-HomepsickNames) }
@@ -20,9 +21,9 @@ function Invoke-HomepsickCastleRefresh {
             Write-Verbose "Castle '$name' is fresh."
             continue
         }
-        if ($Pull) { Update-HomepsickCastle -CastleName $name -Link:$Link -Batch:$Batch }
+        if ($Pull) { Update-HomepsickCastle -CastleName $name -Link:$Link -Batch:$Batch -AllowOutsideHome:$AllowOutsideHome }
         elseif (-not $Batch -and $PSCmdlet.ShouldContinue("Castle '$name' is outdated. Pull it?", 'Refresh castle')) {
-            Update-HomepsickCastle -CastleName $name -Link:$Link
+            Update-HomepsickCastle -CastleName $name -Link:$Link -AllowOutsideHome:$AllowOutsideHome
         }
         elseif (-not $Batch -and $fetch) {
             # Like homeshick, defer another interactive reminder after declining.

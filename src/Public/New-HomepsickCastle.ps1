@@ -6,7 +6,8 @@ function New-HomepsickCastle {
         [Parameter(Mandatory, ParameterSetName = 'Clone')][string]$GitUrl,
         [Parameter(Mandatory, ParameterSetName = 'Init')][string]$CastleName,
         [Parameter(ParameterSetName = 'Clone')][switch]$Link,
-        [Parameter(ParameterSetName = 'Clone')][switch]$Batch
+        [Parameter(ParameterSetName = 'Clone')][switch]$Batch,
+        [Parameter(ParameterSetName = 'Clone')][switch]$AllowOutsideHome
     )
 
     if (-not (Test-PathCommand -command 'git')) { throw 'git is not installed.' }
@@ -35,10 +36,15 @@ function New-HomepsickCastle {
             }
             throw
         }
-        if ($Link) { Enable-HomepsickCastle -CastleName $CastleName -Batch:$Batch }
-        elseif (-not $Batch -and (Test-Path -LiteralPath $castle.CastleSymRoot -PathType Container)) {
+        $hasContent = if (Test-HomepsickEntry (Join-Path $castle.CastlePath 'homepsick.json')) {
+            $plan = Resolve-HomepsickLinkPlan -RepositoryPath $castle.CastlePath
+            if (-not $plan.IsValid) { Write-Warning "Cloned castle has an invalid link plan: $($plan.Errors.Message -join ' ')" }
+            $plan.Winners.Count -gt 0
+        } else { Test-Path -LiteralPath $castle.CastleSymRoot -PathType Container }
+        if ($Link) { Enable-HomepsickCastle -CastleName $CastleName -Batch:$Batch -AllowOutsideHome:$AllowOutsideHome }
+        elseif (-not $Batch -and $hasContent) {
             if ($PSCmdlet.ShouldContinue("Link files from '$CastleName' into your home directory?", 'Link cloned castle')) {
-                Enable-HomepsickCastle -CastleName $CastleName
+                Enable-HomepsickCastle -CastleName $CastleName -AllowOutsideHome:$AllowOutsideHome
             }
         }
     }

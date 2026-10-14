@@ -2,7 +2,8 @@ function Get-HomepsickTrackedFile {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepositoryPath,
-        [string]$Prefix = ''
+        [string]$Prefix = '',
+        [switch]$AllRoots
     )
 
     # --stage distinguishes Git submodules (mode 160000) from ordinary files.
@@ -15,12 +16,18 @@ function Get-HomepsickTrackedFile {
         if ($Matches.mode -eq '160000') {
             $submodule = Join-Path $RepositoryPath $Matches.path
             if (Test-Path -LiteralPath $submodule -PathType Container) {
-                Get-HomepsickTrackedFile -RepositoryPath $submodule -Prefix ($Prefix + $Matches.path + '/')
+                Get-HomepsickTrackedFile -RepositoryPath $submodule -Prefix ($Prefix + $Matches.path + '/') -AllRoots:$AllRoots
             }
         }
-        elseif ($relative.StartsWith(('home' + [IO.Path]::DirectorySeparatorChar), [StringComparison]::Ordinal)) {
-            $path = $relative.Substring(5)
-            [pscustomobject]@{ RelativePath = $path; SourcePath = (Join-Path $RepositoryPath $Matches.path) }
+        elseif ($AllRoots -or $relative.StartsWith(('home' + [IO.Path]::DirectorySeparatorChar), [StringComparison]::Ordinal)) {
+            $path = if ($AllRoots) { $relative } else { $relative.Substring(5) }
+            if ($AllRoots) {
+                [pscustomobject]@{
+                    RelativePath = $path; SourcePath = (Join-Path $RepositoryPath $Matches.path)
+                    RepositoryRelativePath = ($Prefix + $Matches.path)
+                }
+            }
+            else { [pscustomobject]@{ RelativePath = $path; SourcePath = (Join-Path $RepositoryPath $Matches.path) } }
         }
     }
 }

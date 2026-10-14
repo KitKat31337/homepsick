@@ -25,6 +25,8 @@ Omit `-CastleName` on link, pull, check, or refresh to process every installed c
 
 Linking acts on Git-tracked files under a castle's `home` directory, including initialized submodules. Existing paths prompt before replacement. `-Skip` skips conflicts, `-Batch` defaults to skipping them, and `-Force` replaces them. `New-HomepsickCastle`, `Add-HomepsickFile` and `Enable-HomepsickCastle` support PowerShell's `-WhatIf`; update and refresh do not. Use `-Verbose` to show routine per-file status. Windows symbolic links require an account or configuration permitted to create them, such as Developer Mode or an elevated session.
 
+Castles can optionally declare platform and machine overlays, shared settings mappings, and named destinations in `homepsick.json`. See the [manifest guide](docs/manifests.md) for the schema, priority rules, Windows/Linux examples, and external destination safeguards. Castles without a manifest behave as before. Use `Test-HomepsickManifest` to validate a castle and `Get-HomepsickLinkPlan` to inspect selected roots, winning files, ties, and conflicts before linking.
+
 ```powershell
 New-HomepsickCastle -CastleName my-dotfiles
 Add-HomepsickFile -CastleName my-dotfiles -Path "$HOME/.gitconfig"

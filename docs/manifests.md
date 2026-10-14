@@ -1,0 +1,176 @@
+# Manifest roots and destinations
+
+A castle can optionally place `homepsick.json` at its repository root. Castles without this file retain the ordinary homeshick layout and existing link, clone, pull, conflict, and tracking behavior. Only Git-tracked files are linked, including files in initialized submodules. Untracked files are never candidates.
+
+An existing `home/` directory is an implicit root targeting your home at priority 0. Declaring `source: "home"` explicitly replaces that implicit entry, so its files are processed only through the explicit declaration. Multiple explicit entries for the same source are allowed, for example to map shared settings differently on Windows and Linux. A manifest castle can omit `home/` entirely.
+
+`Add-HomepsickFile` continues to track files into `home/`. Create and stage additional roots with Git; inspect the resulting plan before linking.
+
+## Schema version 1
+
+```json
+{
+  "version": 1,
+  "destinations": {
+    "systemConfig": {
+      "path": "/etc/example",
+      "outsideHome": true
+    }
+  },
+  "roots": [
+    { "source": "home_windows", "target": "home", "when": { "os": "windows" } },
+    { "source": "home_linux", "target": "home", "when": { "os": "linux" } },
+    { "source": "home_debian_like", "target": "home", "when": { "distroLike": "debian" } },
+    { "source": "home_ubuntu", "target": "home", "when": { "distro": "ubuntu" } },
+    {
+      "source": "home_ubuntu_2404",
+      "target": "home",
+      "when": { "distro": "ubuntu", "distroVersion": "24.04" }
+    },
+    { "source": "home_windows_server", "target": "home", "when": { "windowsRole": "server" } },
+    { "source": "home_windows_11", "target": "home", "when": { "windowsRelease": "11" } },
+    {
+      "source": "home_windows_11_pro",
+      "target": "home",
+      "when": { "windowsRelease": "11", "windowsEdition": "pro" }
+    },
+    {
+      "source": "home_server_2022_datacenter",
+      "target": "home",
+      "when": { "windowsRelease": "server-2022", "windowsEdition": "datacenter" }
+    },
+    { "source": "home_machine1", "target": "home", "when": { "host": "machine1" } },
+    {
+      "source": "editor_settings",
+      "target": "home",
+      "into": "AppData/Roaming/Editor",
+      "when": { "os": "windows" }
+    },
+    {
+      "source": "editor_settings",
+      "target": "home",
+      "into": ".config/editor",
+      "when": { "os": "linux" }
+    },
+    { "source": "system_config", "target": "systemConfig", "when": { "os": "linux" } }
+  ]
+}
+```
+
+The top-level object requires integer `version: 1` and a `roots` array. `destinations` is optional. Each root requires `source` and `target`; `into`, `when`, and `priority` are optional. An empty `when` or an omitted `when` matches every machine. Unknown properties, duplicate JSON properties, and malformed declarations are errors.
+
+| Property | Meaning |
+| --- | --- |
+| `source` | Directory relative to the castle root. Nested roots are supported, but one declared source must not contain another; this includes implicit `home/`. |
+| `target` | `home`, or a key declared in `destinations`. The name `home` is reserved. |
+| `into` | Optional directory below the target. `editor_settings/settings.json` with `into: ".config/editor"` links to `$HOME/.config/editor/settings.json`. |
+| `when` | Object containing the supported condition fields below. |
+| `priority` | Optional signed 32-bit JSON integer replacing the entire default score. Negative values are permitted. |
+| Destination `path` | Literal `~/relative/path`, POSIX `/absolute/path`, or Windows `C:/absolute/path`. |
+| Destination `outsideHome` | Boolean explicitly authorizing an outside-home destination declaration; runtime authorization is also required. |
+
+Use forward slashes in manifest paths on every platform. `~/` is the only substitution: it denotes the home directory Homepsick already uses (`HOME`, or the user profile when `HOME` is unset). No environment variables, PowerShell expressions, shell commands, or wildcard expansion are evaluated. Spaces are supported. Absolute paths outside the current home require `outsideHome: true`; prefer `~/` for portable locations within home. Windows drive paths only resolve on Windows, and POSIX absolute paths only resolve on Unix. A foreign-platform absolute destination must explicitly declare `outsideHome: true` and may be used when its roots are skipped on the current machine.
+
+Source and `into` paths must be relative; destination paths must use one of the three forms above. Paths cannot contain traversal (`.` or `..`), empty components, `.git`, backslashes, control characters, wildcards, Windows-invalid punctuation, trailing dots/spaces, or reserved Windows device names. Filesystem-root destinations are rejected. Manifest-selected tracked filenames follow these portable restrictions too. Ordinary castles without manifests retain their existing filename rules.
+
+## Conditions and detection
+
+Different fields combine with AND. A string array within a field combines with OR; `"os": ["linux"]` has exactly the same match and score as `"os": "linux"`. Arrays must contain at least one distinct, nonempty string. Conditions and detected identifiers are trimmed and compared case-insensitively; plans show normalized lowercase facts. Numeric-looking releases must still be JSON strings.
+
+| Field | Values and source |
+| --- | --- |
+| `os` | `windows`, `linux`, `macos`, or `freebsd`, detected from PowerShell's platform flags. |
+| `distroLike` | Any lineage in Linux `ID_LIKE`, such as `debian`, `rhel`, or `fedora`. All space-separated lineages are retained. This does not infer a lineage from `ID`. |
+| `distro` | Exact Linux `ID`, such as `ubuntu`, `debian`, or `fedora`. |
+| `distroVersion` | Exact Linux `VERSION_ID`, such as `"24.04"`. |
+| `windowsRole` | `workstation` or `server`. CIM `Win32_OperatingSystem.ProductType` 1 is workstation; 2 (domain controller) and 3 are server. |
+| `windowsRelease` | `"10"`, `"11"`, `"server-2016"`, `"server-2019"`, `"server-2022"`, or `"server-2025"` are detected. Numeric future workstation names and `server-YYYY`/`server-YYYY-r2` remain valid declarations even when detection cannot recognize them. |
+| `windowsEdition` | `home`, `pro`, `enterprise`, `education`, `standard`, or `datacenter`, normalized from CIM's language-independent `OperatingSystemSKU`. N, Core, evaluation, subscription, and Pro workstation variants are grouped into their edition families. Unknown SKUs remain unavailable. |
+| `host` | Full machine name returned by .NET `Environment.MachineName`, lowercased; no DNS or short-name inference. |
+
+Linux detection reads `/etc/os-release`, falling back to `/usr/lib/os-release`. It parses the identifiers as data, without sourcing the file. Linux-specific fields only match Linux. Windows-specific fields only match Windows. You can write `"distro": "ubuntu"` or `"windowsRelease": "11"` without an `os` field; platform requirements inferred during matching do not contribute priority.
+
+Windows role, release, and edition are independent. Release detection uses CIM product type and build families, with product caption information for Windows 11; it does not distinguish Windows 10 and 11 using the NT major version. Known Windows 11 builds override stale Windows 10 product text. Server build families map 14393/17763/20348/26100 to 2016/2019/2022/2025, independently of workstation builds. Unknown future releases remain unavailable rather than invalidating the manifest. Conditions requiring unavailable facts are skipped with an explanation in `Entries.Reasons`; acquisition failures appear in `FactNotes`.
+
+The product facts and edition mapping follow Microsoft's [CIM documentation](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-operatingsystem), [Windows SDK SKU definitions](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/winnt.h), and [workstation](https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information) and [Server release information](https://learn.microsoft.com/en-us/windows/release-health/windows-server-release-info).
+
+## Priority within a castle
+
+Add the score for every condition field **explicitly written** in an entry:
+
+| Condition tier | String or singleton array | Array with two or more values |
+| --- | ---: | ---: |
+| `os` | 100 | 50 |
+| `distroLike`, `windowsRole` | 1,000 per field | 500 per field |
+| `distro`, `distroVersion`, `windowsRelease`, `windowsEdition` | 10,000 per field | 5,000 per field |
+| `host` | 100,000 | 50,000 |
+
+Implicit `home/` scores 0. Ubuntu alone scores 10,000; Ubuntu and `"24.04"` score 20,000. Windows 11 alone scores 10,000; Pro alone also scores 10,000; Windows 11 and Pro together score 20,000. `host: "machine1"` and `os: "windows"` score 100,100. `host: ["machine1", "machine2"]` scores 50,000. A matching multi-value array scores once per field, even when several `ID_LIKE` values match.
+
+For each destination file, the highest-priority candidate wins. Lower-priority candidates are reported as shadowed. Equal highest priorities are errors before any files from that castle are linked, regardless of manifest order or Git enumeration order. A higher-priority combined overlay can resolve a lower-priority release/edition tie. A file destination that would contain another file destination is also an error, even when their priorities differ. Comparison follows the executing platform's path rules.
+
+An explicit `priority` replaces the entire calculated score, rather than adding to it:
+
+```json
+{ "source": "home_special", "target": "home", "when": { "os": "windows" }, "priority": 75000 }
+```
+
+This entry scores 75,000, between a host array (50,000) and a single host (100,000). For complex custom ordering, assign explicit priorities to all competing entries. Priority never changes precedence between different castles; their conflicts retain the existing prompt, `-Skip`, `-Batch`, and `-Force` behavior.
+
+## Validate and preview
+
+```powershell
+$validation = Test-HomepsickManifest -CastleName dotfiles
+$validation.IsValid
+$validation.Errors | Format-Table Code, Entries, Message -Wrap
+$validation.Warnings | Format-Table Code, Entries, Message -Wrap
+
+$plan = Get-HomepsickLinkPlan -CastleName dotfiles
+$plan.MachineFacts
+$plan.FactNotes
+$plan.Entries | Format-Table Entry, Source, Selected, Priority, Reasons -Wrap
+$plan.Candidates | Format-Table Entry, SourcePath, DestinationPath, Priority, Status, ExistingState, Reason -Wrap
+$plan.Winners
+$plan.Shadowed
+$plan.Ties
+$plan.Conflicts
+```
+
+Both commands are read only and also accept `-RepositoryPath /path/to/castle` instead of `-CastleName`. Validation returns structured `Errors` and `Warnings`, each with a code, message, and involved entry identifiers such as `roots[2]`. It checks schema, paths, platform compatibility, overlapping sources, and current-machine file ties. Missing source directories are warnings. Potential equal-priority destination overlaps are warnings even when the relevant files are not present or the entries do not match this machine. A structurally valid manifest can still have ordinary destination conflicts; inspect the plan before linking. Validate synthetic contexts for other machines too.
+
+```powershell
+$facts = @{
+    os = 'windows'
+    host = 'machine1'
+    windowsRole = 'workstation'
+    windowsRelease = '11'
+    windowsEdition = 'pro'
+}
+Get-HomepsickLinkPlan -CastleName dotfiles -MachineFacts $facts
+Test-HomepsickManifest -CastleName dotfiles -MachineFacts $facts
+
+Get-HomepsickLinkPlan -CastleName dotfiles -MachineFacts @{
+    os = 'linux'; host = 'machine1'; distro = 'ubuntu'
+    distroVersion = '24.04'; distroLike = @('debian', 'linux')
+}
+```
+
+`-MachineFacts` replaces detection completely: unspecified fields are unavailable. Fields from another OS are discarded. It changes condition evaluation, while paths still resolve using the executing OS and current user's home. `Enable-HomepsickCastle` also accepts this parameter to execute the same synthetic selection deliberately. Tests inject raw Linux and Windows detection contexts into the internal detector on both CI platforms; they do not rely on the CI host to exercise the other OS.
+
+## Linking and external destinations
+
+```powershell
+Enable-HomepsickCastle -CastleName dotfiles -WhatIf
+Enable-HomepsickCastle -CastleName dotfiles -Batch
+Get-HomepsickLinkPlan -CastleName dotfiles -AllowOutsideHome
+Enable-HomepsickCastle -CastleName dotfiles -AllowOutsideHome -WhatIf
+Enable-HomepsickCastle -CastleName dotfiles -AllowOutsideHome -Batch
+```
+
+Preview and linking share the same root selection and file resolution. A selected outside-home file is reported with `OutsideHome: true` and `Allowed: false` unless `-AllowOutsideHome` is supplied. Linking skips it with a warning without runtime opt in. `-AllowOutsideHome` is also forwarded by clone, pull, and refresh. It grants no operating-system permissions; use an appropriately permitted account for locations such as `/etc/example`.
+
+Existing symbolic links from the same castle can be updated when a different root wins. Ownership requires a verified source-to-destination relationship in a currently declared root, including a skipped root from a previous selection. A removed overlay file can therefore fall back to another tracked file. Arbitrary links merely pointing somewhere in the repository are conflicts. No stale links are broadly cleaned up when a declaration or file disappears without a replacement winner.
+
+Outside home, only a verified managed link can be replaced. Existing regular files, directories, unrelated links, and other castles' links are conflicts and remain untouched even with `-Force`. Managed links are removed individually, without recursive deletion. Manifest source directories and destination parents cannot be symbolic links or reparse points; tracked symbolic source files must resolve to existing files inside the castle. Destinations within the source repository or Homepsick's storage are rejected. Parent paths and managed-link ownership are checked again during linking.
+
+Clone offers its initial link prompt for selected manifest content even when there is no `home/`. Pull rechecks the link workflow when the manifest changes or tracked content in a selected root changes, including modifications, deletions, and submodule pointer updates. Skipped-root changes alone do not prompt. `-Batch` and `-Link` retain their existing roles. `Update-HomepsickCastle -WhatIf` previews the pull without changing Git or destinations.
