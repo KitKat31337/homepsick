@@ -27,7 +27,7 @@ BeforeAll {
         return $source
     }
     function Invoke-WorkflowPrompt {
-        param([string]$GitUrl)
+        param([string]$GitUrl, [string]$Answer)
         $childScript = Join-Path $TestDrive 'interactive-clone.ps1'
         @'
 param([string]$ModulePath, [string]$GitUrl)
@@ -49,7 +49,7 @@ New-HomepsickCastle -Clone -GitUrl $GitUrl | Out-Null
             [void]$process.Start()
             $stdout = $process.StandardOutput.ReadToEndAsync()
             $stderr = $process.StandardError.ReadToEndAsync()
-            $process.StandardInput.WriteLine('Y')
+            $process.StandardInput.WriteLine($Answer)
             $process.StandardInput.Close()
             if (-not $process.WaitForExit(30000)) {
                 $process.Kill($true)
@@ -79,9 +79,19 @@ Describe 'Clone and pull with manifests' {
         Get-Content -LiteralPath (Join-Path $env:HOME '.config/editor/example') | Should -Be 'initial'
     }
 
-    It 'offers the initial interactive clone prompt for a manifest-only castle' {
-        Invoke-WorkflowPrompt -GitUrl $source | Should -BeLike '*Link cloned castle*'
-        Get-Content -LiteralPath (Join-Path $env:HOME '.config/editor/example') | Should -Be 'initial'
+    It 'honors <Answer> at the initial clone prompt for a manifest-only castle' -ForEach @(
+        @{ Answer = 'Y'; Linked = $true }
+        @{ Answer = 'N'; Linked = $false }
+    ) {
+        # Windows' console host does not redirect prompt text consistently. Verify
+        # both decisions through their effects, rather than captured UI formatting.
+        Invoke-WorkflowPrompt -GitUrl $source -Answer $Answer | Out-Null
+        $link = Join-Path $env:HOME '.config/editor/example'
+        Test-Path -LiteralPath $link | Should -Be $Linked
+        if ($Linked) {
+            (Get-Item -LiteralPath $link -Force).LinkType | Should -Be 'SymbolicLink'
+            Get-Content -LiteralPath $link | Should -Be 'initial'
+        }
     }
 
     It 'pulls and links new non-home files' {
