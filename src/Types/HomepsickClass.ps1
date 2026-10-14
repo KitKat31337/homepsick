@@ -21,7 +21,7 @@ class HomepsickCastle {
         if (-not $this.Exists()) { return @() }
         if (Test-HomepsickEntry (Join-Path $this.CastlePath 'homepsick.json')) {
             $plan = Resolve-HomepsickLinkPlan -RepositoryPath $this.CastlePath
-            if (-not $plan.IsValid) { throw "Invalid manifest link plan: $($plan.Errors.Message -join ' ')" }
+            if (-not $plan.IsValid) { throw "Invalid manifest link plan: $((Format-HomepsickDiagnostic $plan.Errors) -join [Environment]::NewLine)" }
             return @($plan.Winners)
         }
         return @(Get-HomepsickTrackedFile -RepositoryPath $this.CastlePath)

@@ -38,12 +38,12 @@ function New-HomepsickCastle {
         }
         $hasContent = if (Test-HomepsickEntry (Join-Path $castle.CastlePath 'homepsick.json')) {
             $plan = Resolve-HomepsickLinkPlan -RepositoryPath $castle.CastlePath
-            if (-not $plan.IsValid) { Write-Warning "Cloned castle has an invalid link plan: $($plan.Errors.Message -join ' ')" }
+            if (-not $plan.IsValid) { Write-Warning "Cloned castle has an invalid link plan: $((Format-HomepsickDiagnostic $plan.Errors) -join [Environment]::NewLine)" }
             $plan.Winners.Count -gt 0
         } else { Test-Path -LiteralPath $castle.CastleSymRoot -PathType Container }
         if ($Link) { Enable-HomepsickCastle -CastleName $CastleName -Batch:$Batch -AllowOutsideHome:$AllowOutsideHome }
         elseif (-not $Batch -and $hasContent) {
-            if ($PSCmdlet.ShouldContinue("Link files from '$CastleName' into your home directory?", 'Link cloned castle')) {
+            if ($PSCmdlet.ShouldContinue("Link files from '$CastleName' into the selected destinations?", 'Link cloned castle')) {
                 Enable-HomepsickCastle -CastleName $CastleName -AllowOutsideHome:$AllowOutsideHome
             }
         }

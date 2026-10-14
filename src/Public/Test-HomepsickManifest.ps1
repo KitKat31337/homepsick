@@ -1,5 +1,17 @@
 function Test-HomepsickManifest {
-    <# .SYNOPSIS Validates a castle manifest and reports errors and warnings without modifying files. #>
+    <#
+    .SYNOPSIS
+    Validates a castle manifest and reports errors and warnings without modifying files.
+    .PARAMETER CastleName
+    Name of an installed castle to validate.
+    .PARAMETER RepositoryPath
+    Path to a castle repository to validate without installing it.
+    .PARAMETER MachineFacts
+    A complete synthetic fact context for checking selection and actual file ties.
+    .EXAMPLE
+    Test-HomepsickManifest -RepositoryPath ./dotfiles | Format-List IsValid, Errors, Warnings
+    Reports structured diagnostics for a local castle without modifying its files.
+    #>
     [CmdletBinding(DefaultParameterSetName = 'Castle')]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Castle')][string]$CastleName,

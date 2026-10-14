@@ -15,9 +15,11 @@ function Enable-HomepsickCastle {
     foreach ($name in $names) {
         $castle = Get-HomepsickCastle -CastleName $name
         $plan = Resolve-HomepsickLinkPlan -RepositoryPath $castle.CastlePath -MachineFacts $MachineFacts -AllowOutsideHome:$AllowOutsideHome
-        foreach ($warning in $plan.Warnings) { Write-Warning "$($warning.Entries -join ', '): $($warning.Message)" }
         if (-not $plan.IsValid) {
-            throw "Castle '$name' has an invalid link plan: $($plan.Errors.Message -join ' ')"
+            throw "Castle '$name' has an invalid link plan: $((Format-HomepsickDiagnostic $plan.Errors) -join [Environment]::NewLine)"
+        }
+        foreach ($warning in @($plan.Warnings | Where-Object Code -ne PotentialTie)) {
+            Write-Warning (Format-HomepsickDiagnostic @($warning))
         }
 
         foreach ($file in $plan.Winners) {
@@ -45,11 +47,9 @@ function Enable-HomepsickCastle {
                     Write-Verbose "Already linked: $link"
                     continue
                 }
-                if ($plan.HasManifest -and $file.OutsideHome) {
-                    if ($state -ne 'ManagedLink') {
-                        Write-Warning "External destination conflict at '$link'; only a verified link from this castle can be replaced."
-                        continue
-                    }
+                if ($existing.PSIsContainer -and $existing.LinkType -ne 'SymbolicLink') {
+                    Write-Warning "[DirectoryConflict] $($file.Entry): Leaving directory '$link' for review; directory trees are never replaced."
+                    continue
                 }
                 $managed = $plan.HasManifest -and $state -eq 'ManagedLink'
                 if ($managed) {
@@ -68,7 +68,15 @@ function Enable-HomepsickCastle {
                         continue
                     }
                     if (-not $PSCmdlet.ShouldProcess($link, 'Replace with castle link')) { continue }
-                    Remove-Item -LiteralPath $link -Force -Recurse -ErrorAction Stop
+                    if ($plan.HasManifest) {
+                        $obstacle = Get-HomepsickPathObstacle -Path $link
+                        if ($obstacle) { throw $obstacle }
+                    }
+                    $current = Get-Item -LiteralPath $link -Force -ErrorAction Stop
+                    if ($current.PSIsContainer -and $current.LinkType -ne 'SymbolicLink') {
+                        throw "[DirectoryConflict] $($file.Entry): Destination became a directory during confirmation: '$link'."
+                    }
+                    Remove-Item -LiteralPath $link -Force -ErrorAction Stop
                 }
             }
             elseif (-not $PSCmdlet.ShouldProcess($link, 'Create castle link')) { continue }

@@ -1,10 +1,10 @@
 # Manifest roots and destinations
 
-A castle can optionally place `homepsick.json` at its repository root. Castles without this file retain the ordinary homeshick layout and existing link, clone, pull, conflict, and tracking behavior. Only Git-tracked files are linked, including files in initialized submodules. Untracked files are never candidates.
+A castle can optionally place `homepsick.json` at its repository root. Castles without this file retain the ordinary homeshick layout and command usage, including home-file tracking. Only Git-tracked files are linked, including files in initialized submodules. Untracked files are never candidates. For every castle, directory conflicts remain for review; `-Force` replaces individual files or symbolic links and never recursively deletes a directory tree.
 
 An existing `home/` directory is an implicit root targeting your home at priority 0. Declaring `source: "home"` explicitly replaces that implicit entry, so its files are processed only through the explicit declaration. Multiple explicit entries for the same source are allowed, for example to map shared settings differently on Windows and Linux. A manifest castle can omit `home/` entirely.
 
-`Add-HomepsickFile` continues to track files into `home/`. Create and stage additional roots with Git; inspect the resulting plan before linking.
+`Add-HomepsickFile` uses applicable manifest mappings to track destination files into source roots, including castles without `home/` and explicitly authorized external destinations. Without a manifest it continues to track home files into `home/`.
 
 ## Schema version 1
 
@@ -115,7 +115,7 @@ An explicit `priority` replaces the entire calculated score, rather than adding 
 { "source": "home_special", "target": "home", "when": { "os": "windows" }, "priority": 75000 }
 ```
 
-This entry scores 75,000, between a host array (50,000) and a single host (100,000). For complex custom ordering, assign explicit priorities to all competing entries. Priority never changes precedence between different castles; their conflicts retain the existing prompt, `-Skip`, `-Batch`, and `-Force` behavior.
+This entry scores 75,000, between a host array (50,000) and a single host (100,000). For complex custom ordering, assign explicit priorities to all competing entries. Priority never changes precedence between different castles. File and symbolic-link conflicts use the existing prompt, `-Skip`, `-Batch`, and `-Force` controls; directory conflicts are always left intact.
 
 ## Validate and preview
 
@@ -136,7 +136,7 @@ $plan.Ties
 $plan.Conflicts
 ```
 
-Both commands are read only and also accept `-RepositoryPath /path/to/castle` instead of `-CastleName`. Validation returns structured `Errors` and `Warnings`, each with a code, message, and involved entry identifiers such as `roots[2]`. It checks schema, paths, platform compatibility, overlapping sources, and current-machine file ties. Missing source directories are warnings. Potential equal-priority destination overlaps are warnings even when the relevant files are not present or the entries do not match this machine. A structurally valid manifest can still have ordinary destination conflicts; inspect the plan before linking. Validate synthetic contexts for other machines too.
+Both commands are read only and also accept `-RepositoryPath /path/to/castle` instead of `-CastleName`. Validation returns structured `Errors` and `Warnings`, each with a code, message, and involved entry identifiers such as `roots[2]`. It checks schema, paths, platform compatibility, overlapping sources, and current-machine file ties. Identical root declarations are `DuplicateRoot` errors even without files; condition property/value order and scalar versus singleton arrays do not make declarations distinct. Mutually exclusive entries reusing a source remain valid. Missing sources are warnings, as are declared existing sources with no tracked linkable files (`NoTrackedFiles`). Potential equal-priority overlaps remain warnings in validation and preview even when files are absent or entries do not match this machine. Linking reports current-plan errors with codes and entry identifiers, and omits the static `PotentialTie` warnings when executing an unambiguous plan. A structurally valid manifest can still have ordinary destination conflicts; inspect the plan before linking. Validate synthetic contexts for other machines too.
 
 ```powershell
 $facts = @{
@@ -155,7 +155,23 @@ Get-HomepsickLinkPlan -CastleName dotfiles -MachineFacts @{
 }
 ```
 
-`-MachineFacts` replaces detection completely: unspecified fields are unavailable. Fields from another OS are discarded. It changes condition evaluation, while paths still resolve using the executing OS and current user's home. `Enable-HomepsickCastle` also accepts this parameter to execute the same synthetic selection deliberately. Tests inject raw Linux and Windows detection contexts into the internal detector on both CI platforms; they do not rely on the CI host to exercise the other OS.
+`-MachineFacts` replaces detection completely: unspecified fields are unavailable. Fields from another OS are discarded. It changes condition evaluation, while paths still resolve using the executing OS and current user's home. `Enable-HomepsickCastle` and `Add-HomepsickFile` also accept this parameter to execute the same synthetic selection deliberately. Tests inject raw Linux and Windows detection contexts into the internal detector on both CI platforms; they do not rely on the CI host to exercise the other OS. Windows release/edition normalization tests use synthetic CIM facts rather than asserting the CI host's product identity.
+
+## Track files into roots
+
+```powershell
+Add-HomepsickFile -CastleName dotfiles -Path "$HOME/.config/editor/settings.json" -Root editor_settings -WhatIf
+Add-HomepsickFile -CastleName dotfiles -Path "$HOME/.config/editor/settings.json" -Root editor_settings
+Add-HomepsickFile -CastleName dotfiles -Path /etc/example/settings.conf -Root system_config -AllowOutsideHome
+```
+
+Tracking reverses the applicable destination and `into` mapping to obtain the source-relative filename, moves the file into that root, stages it in Git, and links its original location back through the shared link plan. Directories are processed file by file, preserving relative paths. Files inside initialized submodules are staged in the submodule's own index; Homepsick does not commit the submodule or change its parent pointer. Ignore rules and existing source files retain their usual skip behavior.
+
+If several mappings qualify, tracking reports `AmbiguousTrackingRoot` and requires `-Root`, regardless of priority. Choose a source directory, such as `home_linux`, or the entry identifier shown in the plan, such as `-Root 'roots[2]'`. A source-directory choice must identify one applicable entry for that file; use an entry identifier when shared-source mappings still leave several choices. An implicit `home/` and an active overlay targeting home can both qualify. Inactive roots cannot be selected to bypass their conditions.
+
+`-Root` chooses where to store the file, without changing link priority. If another root already supplies a higher-priority file at that destination, the saved file is staged in the chosen root and the link-back points to the plan's winner. Tracking does not broadly link or clean other destinations. External files require the destination's `outsideHome: true` declaration and `-AllowOutsideHome`, just as linking does.
+
+Tracking checks source and destination parents, portable relative paths, and castle-storage protection before moving files. Manifest source symbolic links must satisfy the same internal-file rules as linking. A failed move preserves the input; a failure during staging, validation, or link creation restores the original file or link and its prior Git index entry while preserving unrelated staged work. `-WhatIf` does not move, stage, or create source directories. `Get-Help Add-HomepsickFile -Full` describes the parameters and an example.
 
 ## Linking and external destinations
 
@@ -171,6 +187,6 @@ Preview and linking share the same root selection and file resolution. A selecte
 
 Existing symbolic links from the same castle can be updated when a different root wins. Ownership requires a verified source-to-destination relationship in a currently declared root, including a skipped root from a previous selection. A removed overlay file can therefore fall back to another tracked file. Arbitrary links merely pointing somewhere in the repository are conflicts. No stale links are broadly cleaned up when a declaration or file disappears without a replacement winner.
 
-Outside home, only a verified managed link can be replaced. Existing regular files, directories, unrelated links, and other castles' links are conflicts and remain untouched even with `-Force`. Managed links are removed individually, without recursive deletion. Manifest source directories and destination parents cannot be symbolic links or reparse points; tracked symbolic source files must resolve to existing files inside the castle. Destinations within the source repository or Homepsick's storage are rejected. Parent paths and managed-link ownership are checked again during linking.
+After outside-home opt in, conflicts follow the same policy inside and outside home. Verified managed links can be updated when the winner changes. Other individual files or symbolic links require confirmation or deliberate `-Force`; `-Batch` skips them unless combined with `-Force`, and `-Skip` always leaves them untouched. `-WhatIf` previews replacements without writing. Directory trees are never replaced, even with `-Force`, and are reported as conflicts for review. Removing a directory symbolic link leaves its target directory intact. Manifest source directories and destination parents cannot be symbolic links or reparse points; tracked symbolic source files must resolve to existing files inside the castle. Destinations within the source repository or Homepsick's storage are rejected. Parent paths and managed-link ownership are checked again during linking.
 
 Clone offers its initial link prompt for selected manifest content even when there is no `home/`. Pull rechecks the link workflow when the manifest changes or tracked content in a selected root changes, including modifications, deletions, and submodule pointer updates. Skipped-root changes alone do not prompt. `-Batch` and `-Link` retain their existing roles. `Update-HomepsickCastle -WhatIf` previews the pull without changing Git or destinations.

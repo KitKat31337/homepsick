@@ -209,7 +209,7 @@ Describe 'External destination safeguards' {
         Get-Content -LiteralPath (Join-Path $outside 'example') | Should -Be 'system'
     }
 
-    It 'preserves an external <Kind> even with force and explicit opt in' -ForEach @(
+    It 'applies the external conflict policy after explicit opt in for a <Kind>' -ForEach @(
         @{ Kind = 'file' }
         @{ Kind = 'directory' }
         @{ Kind = 'unrelated symbolic link' }
@@ -236,9 +236,12 @@ Describe 'External destination safeguards' {
         }
         $plan = Get-HomepsickLinkPlan -CastleName configs -AllowOutsideHome
         $plan.Conflicts.Count | Should -Be 1
-        Enable-HomepsickCastle -CastleName configs -AllowOutsideHome -Force -Batch -WarningAction SilentlyContinue
+        Enable-HomepsickCastle -CastleName configs -AllowOutsideHome -Batch -WarningAction SilentlyContinue
         $check = if ($Kind -eq 'directory') { Join-Path $existingPath 'keep' } else { $existingPath }
         Get-Content -LiteralPath $check | Should -Be 'keep'
+        Enable-HomepsickCastle -CastleName configs -AllowOutsideHome -Force -Batch -WarningAction SilentlyContinue
+        $expected = if ($Kind -eq 'directory') { 'keep' } else { 'system' }
+        Get-Content -LiteralPath $check | Should -Be $expected
     }
 
     It 'updates only a verified managed link in an external location' {

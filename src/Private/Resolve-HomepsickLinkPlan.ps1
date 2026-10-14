@@ -28,6 +28,8 @@ function Resolve-HomepsickLinkPlan {
     $RepositoryPath = [IO.Path]::GetFullPath($RepositoryPath)
     $homePath = [IO.Path]::GetFullPath((Get-HomePath))
     $manifest = Get-HomepsickManifest $RepositoryPath
+    $warnings = [Collections.Generic.List[object]]::new()
+    foreach ($warning in $manifest.Warnings) { $warnings.Add($warning) }
     $detected = Get-HomepsickMachineFact -MachineFacts $MachineFacts
     $entries = @(Get-HomepsickRootSelection -Roots $manifest.Roots -Facts $detected.Facts)
     $errors = [Collections.Generic.List[object]]::new()
@@ -40,6 +42,22 @@ function Resolve-HomepsickLinkPlan {
     }
     if (-not $errors.Count -and $entries.Count) {
         $tracked = @(Get-HomepsickTrackedFile -RepositoryPath $RepositoryPath -AllRoots)
+        if ($manifest.HasManifest) {
+            foreach ($root in @($manifest.Roots | Where-Object { -not $_.Implicit })) {
+                $sourcePath = [IO.Path]::Combine($RepositoryPath, $root.Source)
+                $linkable = @($tracked | Where-Object {
+                    $_.RepositoryRelativePath.StartsWith($root.Source + '/', [StringComparison]::Ordinal) -and
+                    (Test-HomepsickRelativePath $_.RepositoryRelativePath.Substring($root.Source.Length + 1)) -and
+                    $null -eq (Get-HomepsickSourceIssue -Path $_.SourcePath -RepositoryPath $RepositoryPath)
+                })
+                if ((Test-Path -LiteralPath $sourcePath -PathType Container) -and -not $linkable.Count) {
+                    $warnings.Add([pscustomobject]@{
+                        Severity = 'Warning'; Code = 'NoTrackedFiles'; Entries = @($root.Entry)
+                        Message = "Source directory '$($root.Source)' has no Git-tracked linkable files."
+                    })
+                }
+            }
+        }
         foreach ($entry in $entries) {
             # Even skipped roots can own a link from a previous selection. Verify the
             # source-to-destination relationship before replacing such a link.
@@ -77,21 +95,8 @@ function Resolve-HomepsickLinkPlan {
                         & $addError UnsafeTrackedPath $entry.Entry "Tracked path '$relative' is not a safe portable relative path."
                         continue
                     }
-                    $obstacle = Get-HomepsickPathObstacle -Path $source -StopAt $RepositoryPath
-                    if ($obstacle) { & $addError UnsafeSource $entry.Entry $obstacle; continue }
-                    $sourceItem = Get-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue
-                    if (-not $sourceItem) { & $addError MissingTrackedSource $entry.Entry "Tracked source '$source' is missing."; continue }
-                    if ($sourceItem.LinkType -or ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-                        try { $resolved = $sourceItem.ResolveLinkTarget($true) }
-                        catch { $resolved = $null }
-                        if (-not $resolved -or -not $resolved.Exists -or $resolved -is [IO.DirectoryInfo] -or
-                            -not (Test-HomepsickContainedPath -Parent $RepositoryPath -Path $resolved.FullName) -or
-                            (Get-HomepsickPathObstacle -Path $resolved.FullName -StopAt $RepositoryPath)) {
-                            & $addError UnsafeSourceLink $entry.Entry "Tracked symbolic link '$source' must resolve to a file inside the castle."
-                            continue
-                        }
-                    }
-                    elseif ($sourceItem.PSIsContainer) { & $addError UnsafeSource $entry.Entry "Tracked source '$source' is a directory."; continue }
+                    $sourceIssue = Get-HomepsickSourceIssue -Path $source -RepositoryPath $RepositoryPath
+                    if ($sourceIssue) { & $addError $sourceIssue.Code $entry.Entry $sourceIssue.Message; continue }
                     if (Test-HomepsickContainedPath -Parent (Get-HomepsickPath -Root) -Path $destination -AllowEqual) {
                         & $addError CastleStorageDestination $entry.Entry "Destination '$destination' is inside Homepsick's castle storage."
                         continue
@@ -157,7 +162,12 @@ function Resolve-HomepsickLinkPlan {
             }
         }
         if (-not $candidate.Allowed) { $candidate.Reason = 'Requires -AllowOutsideHome before modifying this destination.' }
-        elseif ($candidate.ExistingState -eq 'Conflict') { $candidate.Reason = 'Existing destination conflicts with the proposed link.' }
+        elseif ($candidate.ExistingState -eq 'Conflict') {
+            $existing = Get-Item -LiteralPath $candidate.DestinationPath -Force
+            $candidate.Reason = if ($existing.PSIsContainer -and $existing.LinkType -ne 'SymbolicLink') {
+                'Existing directory conflict remains for review; directory trees are never replaced.'
+            } else { 'Existing destination conflicts with the proposed link.' }
+        }
     }
     [pscustomobject]@{
         RepositoryPath = $RepositoryPath; HasManifest = $manifest.HasManifest
@@ -165,6 +175,6 @@ function Resolve-HomepsickLinkPlan {
         Candidates = @($candidates); Winners = $winners; RootMappings = @($mappings)
         Shadowed = @($candidates | Where-Object Status -eq Shadowed); Ties = @($candidates | Where-Object Status -eq Tie)
         Conflicts = @($winners | Where-Object { $_.ExistingState -in @('Conflict', 'Blocked') })
-        Errors = @($errors); Warnings = $manifest.Warnings; IsValid = ($errors.Count -eq 0)
+        Errors = @($errors); Warnings = @($warnings); IsValid = ($errors.Count -eq 0)
     }
 }

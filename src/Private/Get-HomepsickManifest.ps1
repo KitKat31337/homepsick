@@ -175,6 +175,19 @@ function Get-HomepsickManifest {
                 $left = $roots[$i]
                 $right = $roots[$j]
                 $ids = @($left.Entry, $right.Entry)
+                $sameConditions = $left.When.Count -eq $right.When.Count
+                foreach ($key in $left.When.Keys) {
+                    if (-not $right.When.Contains($key) -or
+                        @($left.When[$key]).Count -ne @($right.When[$key]).Count -or
+                        @($left.When[$key] | Where-Object { $_ -notin @($right.When[$key]) }).Count) {
+                        $sameConditions = $false
+                        break
+                    }
+                }
+                if ($left.Source -ceq $right.Source -and $left.Target -ceq $right.Target -and
+                    $left.Into -ceq $right.Into -and $left.Priority -eq $right.Priority -and $sameConditions) {
+                    & $addIssue Error DuplicateRoot $ids 'Identical root declarations must not be processed twice.'
+                }
                 if ($left.Source.StartsWith($right.Source + '/', [StringComparison]::OrdinalIgnoreCase) -or
                     $right.Source.StartsWith($left.Source + '/', [StringComparison]::OrdinalIgnoreCase)) {
                     & $addIssue Error OverlappingSources $ids 'Source roots must not contain one another.'
