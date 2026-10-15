@@ -12,3 +12,6 @@
 # Built Visual Studio Code Extensions
 *.vsix
 
+# Local Pester coverage reports
+artifacts/coverage/
+

@@ -39,3 +39,11 @@ Run the Pester 5+ suite with:
 ```powershell
 Invoke-Pester ./tests
 ```
+
+To collect the same production command-coverage baseline as CI, use Pester 5.7.1 and run:
+
+```powershell
+./tests/Invoke-HomepsickTests.ps1 -ReportDirectory ./artifacts/coverage/local
+```
+
+CI retains separate Windows and Linux artifacts containing JaCoCo XML, missed-command CSV, and test/coverage summaries. Coverage is informational, with no percentage gate; inspect missed safety paths alongside the suite's file, link, and rollback assertions.

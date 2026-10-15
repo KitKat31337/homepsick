@@ -15,9 +15,12 @@ jobs:
       - name: Install Pester
         shell: pwsh
         run: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
-      - name: Run tests
+      - name: Run tests with command coverage
         shell: pwsh
-        run: |
-          Import-Module Pester -RequiredVersion 5.7.1
-          $result = Invoke-Pester -Path ./tests -PassThru -Output Detailed
-          if ($result.FailedCount -gt 0) { exit 1 }
+        run: ./tests/Invoke-HomepsickTests.ps1 -ReportDirectory ./artifacts/coverage/${{ matrix.os }}
+      - name: Retain test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pester-coverage-${{ matrix.os }}
+          path: artifacts/coverage/${{ matrix.os }}/
