@@ -1,5 +1,28 @@
+# Load base and property types before the classes that reference them; alphabetical
+# file enumeration cannot guarantee the dependency order of separate class files.
+$typeFiles = @(
+    'HomepsickClass.ps1'
+    'HomepsickDiagnostic.ps1'
+    'HomepsickDestination.ps1'
+    'HomepsickManifestRoot.ps1'
+    'HomepsickRootSelection.ps1'
+    'HomepsickManifest.ps1'
+    'HomepsickMachineFacts.ps1'
+    'HomepsickMachineFactResult.ps1'
+    'HomepsickLinkMapping.ps1'
+    'HomepsickLinkCandidate.ps1'
+    'HomepsickLinkPlan.ps1'
+    'HomepsickTrackingPath.ps1'
+    'HomepsickGitResult.ps1'
+    'HomepsickManifestValidationResult.ps1'
+    'HomepsickTrackedFile.ps1'
+    'HomepsickRepositoryFile.ps1'
+)
+$Types = @($typeFiles | ForEach-Object {
+    Get-Item -LiteralPath (Join-Path $PSScriptRoot "Types/$_") -ErrorAction Stop
+})
+
 #Get public and private function definition files.
-    $Types    = @( Get-ChildItem -Path $PSScriptRoot\Types\*.ps1 -ErrorAction SilentlyContinue )
     $Publics  = @( Get-ChildItem -Path $PSScriptRoot\Public\*.ps1 -ErrorAction SilentlyContinue )
     $Privates = @( Get-ChildItem -Path $PSScriptRoot\Private\*.ps1 -ErrorAction SilentlyContinue )
 
