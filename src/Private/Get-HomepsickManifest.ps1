@@ -61,18 +61,24 @@ function Get-HomepsickManifest {
                     if ($key -cnotin @('path', 'outsideHome')) { & $addIssue Error UnknownProperty @() "Unknown property '$key' in destination '$name'." }
                 }
                 $path = $destination.path
-                $relative = if ($path -is [string]) { $path -replace '^(~/|/|[A-Za-z]:/)', '' } else { $null }
-                if ($path -isnot [string] -or $path -notmatch '^(~/|/|[A-Za-z]:/)' -or -not (Test-HomepsickRelativePath $relative)) {
-                    & $addIssue Error InvalidDestinationPath @() "Destination '$name' requires a literal ~/path, /absolute/path, or C:/absolute/path without traversal."
+                # Only drive-absolute Windows destinations accept backslashes.
+                # Normalize their separators before portable validation; UNC/device
+                # prefixes and backslashes in source/into/home-relative paths stay invalid.
+                $portablePath = if ($path -is [string] -and $path -match '^[A-Za-z]:[\\/]') {
+                    $path.Replace('\', '/')
+                } else { $path }
+                $relative = if ($portablePath -is [string]) { $portablePath -replace '^(~/|/|[A-Za-z]:/)', '' } else { $null }
+                if ($portablePath -isnot [string] -or $portablePath -notmatch '^(~/|/|[A-Za-z]:/)' -or -not (Test-HomepsickRelativePath $relative)) {
+                    & $addIssue Error InvalidDestinationPath @() "Destination '$name' requires a literal ~/path, /absolute/path, or drive-absolute Windows subdirectory without traversal."
                     continue
                 }
                 if ($destination.Contains('outsideHome') -and $destination.outsideHome -isnot [bool]) {
                     & $addIssue Error InvalidOutsideHome @() "outsideHome on '$name' must be a boolean."
                 }
-                if (-not $path.StartsWith('~/') -and $destination.outsideHome -ne $true) {
+                if (-not $portablePath.StartsWith('~/') -and $destination.outsideHome -ne $true) {
                     $insideHome = $false
                     try {
-                        $resolved = Resolve-HomepsickDestination -Path $path -HomePath (Get-HomePath)
+                        $resolved = Resolve-HomepsickDestination -Path $portablePath -HomePath (Get-HomePath)
                         $insideHome = Test-HomepsickContainedPath -Parent ([IO.Path]::GetFullPath((Get-HomePath))) -Path $resolved -AllowEqual
                     }
                     catch { $insideHome = $false }
@@ -81,7 +87,7 @@ function Get-HomepsickManifest {
                     }
                 }
                 if (@($issues | Where-Object Severity -eq Error).Count -ne $startErrors) { continue }
-                $destinations[$name] = [HomepsickDestination]@{ Path = $path; OutsideHome = ($destination.outsideHome -eq $true) }
+                $destinations[$name] = [HomepsickDestination]@{ Path = $portablePath; OutsideHome = ($destination.outsideHome -eq $true) }
             }
         }
         # Validate each raw root before converting it into the shared root contract.
@@ -136,7 +142,14 @@ function Get-HomepsickManifest {
                     $when[$key] = $values
                 }
             }
-            if (-not @(Get-HomepsickConditionOS $when).Count) { & $addIssue Error UnreachableEntry $id 'Conditions require incompatible operating systems.' }
+            $destinationOS = @()
+            if ($entry.target -is [string] -and $destinations.ContainsKey($entry.target)) {
+                $destinationPath = $destinations[$entry.target].Path
+                if ($destinationPath -match '^[A-Za-z]:/') { $destinationOS = @('windows') }
+            }
+            if (-not @(Get-HomepsickConditionOS -When $when -DestinationOS $destinationOS).Count) {
+                & $addIssue Error UnreachableEntry $id 'Conditions and destination require incompatible operating systems.'
+            }
             if ($when.Contains('windowsRole') -and $when.Contains('windowsRelease')) {
                 $releaseRoles = @($when.windowsRelease | ForEach-Object { if ($_ -like 'server-*') { 'server' } else { 'workstation' } })
                 if (-not @($releaseRoles | Where-Object { $_ -in $when.windowsRole }).Count) {
@@ -147,6 +160,7 @@ function Get-HomepsickManifest {
             $calculated = Get-HomepsickRootPriority $when
             $roots.Add([HomepsickManifestRoot]@{
                 Entry = $id; Source = $entry.source; Target = $entry.target; Into = [string]$entry.into; When = $when
+                DestinationOS = $destinationOS
                 CalculatedPriority = $calculated; PriorityOverridden = $entry.Contains('priority')
                 Priority = if ($entry.Contains('priority')) { [int]$entry.priority } else { $calculated }; Implicit = $false
             })
@@ -190,7 +204,7 @@ function Get-HomepsickManifest {
                     $right.Source.StartsWith($left.Source + '/', [StringComparison]::OrdinalIgnoreCase)) {
                     & $addIssue Error OverlappingSources $ids 'Source roots must not contain one another.'
                 }
-                if (-not (Test-HomepsickConditionsOverlap $left.When $right.When)) { continue }
+                if (-not (Test-HomepsickConditionsOverlap -Left $left -Right $right)) { continue }
                 try {
                     $bases = foreach ($root in @($left, $right)) {
                         $base = if ($root.Target -eq 'home') { [IO.Path]::GetFullPath((Get-HomePath)) }

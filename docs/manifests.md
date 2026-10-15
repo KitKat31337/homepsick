@@ -66,12 +66,32 @@ The top-level object requires integer `version: 1` and a `roots` array. `destina
 | `into` | Optional directory below the target. `editor_settings/settings.json` with `into: ".config/editor"` links to `$HOME/.config/editor/settings.json`. |
 | `when` | Object containing the supported condition fields below. |
 | `priority` | Optional signed 32-bit JSON integer replacing the entire default score. Negative values are permitted. |
-| Destination `path` | Literal `~/relative/path`, POSIX `/absolute/path`, or Windows `C:/absolute/path`. |
+| Destination `path` | Literal `~/relative/path`, POSIX `/absolute/path`, or Windows drive-absolute subdirectory using either `C:/absolute/path` or `C:\absolute\path`. |
 | Destination `outsideHome` | Boolean explicitly authorizing an outside-home destination declaration; runtime authorization is also required. |
 
-Use forward slashes in manifest paths on every platform. `~/` is the only substitution: it denotes the home directory Homepsick already uses (`HOME`, or the user profile when `HOME` is unset). No environment variables, PowerShell expressions, shell commands, or wildcard expansion are evaluated. Spaces are supported. Absolute paths outside the current home require `outsideHome: true`; prefer `~/` for portable locations within home. Windows drive paths only resolve on Windows, and POSIX absolute paths only resolve on Unix. A foreign-platform absolute destination must explicitly declare `outsideHome: true` and may be used when its roots are skipped on the current machine.
+Use forward slashes in `source`, `into`, and home-relative destinations. Windows drive-absolute destinations accept either slash style, including `C:\config`, `D:/config`, and mixed Windows separators. In JSON, escape backslashes: write `"path": "C:\\config"`. Homepsick normalizes drive-destination separators internally without rewriting the manifest. `~/` is the only substitution: it denotes the home directory Homepsick already uses (`HOME`, or the user profile when `HOME` is unset). No environment variables, PowerShell expressions, shell commands, or wildcard expansion are evaluated. Spaces are supported. Absolute paths outside the current home require `outsideHome: true`; prefer `~/` for portable locations within home.
 
-Source and `into` paths must be relative; destination paths must use one of the three forms above. Paths cannot contain traversal (`.` or `..`), empty components, `.git`, backslashes, control characters, wildcards, Windows-invalid punctuation, trailing dots/spaces, or reserved Windows device names. Filesystem-root destinations are rejected. Manifest-selected tracked filenames follow these portable restrictions too. Ordinary castles without manifests retain their existing filename rules.
+A drive-absolute destination makes each root targeting it Windows-only even without `when.os`. Linux skips these entries without needing the drive, destination directory, or source directory to exist; a missing source can still produce a warning. Explicit conditions contradicting the inferred requirement, such as `os: linux` or `distro: ubuntu`, produce `UnreachableEntry` with the root identifier. The inferred platform requirement adds no priority points. POSIX absolute destinations only resolve on Unix; condition their roots explicitly when sharing a manifest with Windows. A foreign-platform absolute declaration still requires `outsideHome: true`.
+
+Source and `into` paths must be relative; destination paths must use one of the three forms above. Paths cannot contain traversal (`.` or `..`), empty components, `.git`, control characters, wildcards, Windows-invalid punctuation, trailing dots/spaces, or reserved Windows device names. Backslashes remain invalid in `source`, `into`, home-relative/POSIX destinations, and tracked relative filenames; accepting Windows destination separators does not relax these rules. Drive-relative paths (`C:config`), UNC and device paths, and filesystem/drive roots (`/`, `C:/`, `D:\`) are rejected. Ordinary castles without manifests retain their existing filename rules.
+
+A manifest can contain both Windows and POSIX destinations even when those paths, drives, or inactive source directories are absent. For example:
+
+```json
+{
+  "version": 1,
+  "destinations": {
+    "windowsConfig": { "path": "C:\\ProgramData\\Example Editor", "outsideHome": true },
+    "linuxConfig": { "path": "/etc/example-editor", "outsideHome": true }
+  },
+  "roots": [
+    { "source": "editor_settings", "target": "windowsConfig" },
+    { "source": "editor_settings", "target": "linuxConfig", "when": { "os": "linux" } }
+  ]
+}
+```
+
+On Linux, the Windows destination is implicitly inactive and does not prevent validation or linking Linux files. On Windows, the Linux entry's condition keeps it inactive. A missing native destination is valid and is created during linking only with the required outside-home opt-in. Synthetic `-MachineFacts` changes condition selection, not the executing filesystem's path rules: selecting Windows facts on Linux can select a drive destination for inspection, but the plan then reports `InvalidDestination` and linking stops before modifying files. Inactive declarations still undergo schema validation, including the restrictions on traversal, UNC/device paths, and drive roots.
 
 ## Conditions and detection
 

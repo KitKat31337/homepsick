@@ -6,6 +6,11 @@ function Get-HomepsickRootSelection {
     param([HomepsickManifestRoot[]]$Roots, [HomepsickMachineFacts]$Facts)
     foreach ($root in $Roots) {
         $reasons = [Collections.Generic.List[string]]::new()
+        # Keep inferred destination requirements out of When so they cannot change
+        # scoring. Missing foreign drives/directories are irrelevant to skipped roots.
+        if ($root.DestinationOS.Count -and $Facts.os -notin $root.DestinationOS) {
+            $reasons.Add("Destination '$($root.Target)' requires OS '$($root.DestinationOS -join ', ')'; detected OS is '$($Facts.os)'.")
+        }
         foreach ($key in $root.When.Keys) {
             $platform = if ($key -in @('distro', 'distroLike', 'distroVersion')) { 'linux' }
                 elseif ($key -in @('windowsRole', 'windowsRelease', 'windowsEdition')) { 'windows' }
@@ -22,6 +27,7 @@ function Get-HomepsickRootSelection {
         [HomepsickRootSelection]@{
             Entry = $root.Entry; Source = $root.Source; Target = $root.Target; Into = $root.Into
             When = $root.When; Priority = $root.Priority; CalculatedPriority = $root.CalculatedPriority
+            DestinationOS = $root.DestinationOS
             PriorityOverridden = $root.PriorityOverridden; Implicit = $root.Implicit
             Selected = ($reasons.Count -eq 0)
             Reasons = if ($reasons.Count) { @($reasons) } else { @('All conditions match.') }

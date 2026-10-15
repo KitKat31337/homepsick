@@ -77,16 +77,17 @@ Describe 'Unsafe source and destination plans' {
         $plan.Winners | Should -BeNullOrEmpty
     }
 
-    It 'reports an applicable foreign-platform destination instead of interpreting it locally' {
+    It 'reports a synthetic selection of a foreign destination instead of interpreting it locally' {
         Add-SafetyFile 'home/settings' | Out-Null
         $foreign = if ($IsWindows) { '/foreign/config' } else { 'Q:/foreign/config' }
+        $facts = @{ os = $(if ($IsWindows) { 'linux' } else { 'windows' }) }
         Set-SafetyManifest @(@{ source = 'home'; target = 'foreign' }) @{
             foreign = @{ path = $foreign; outsideHome = $true }
         }
         $manifest = Join-Path $castle.CastlePath 'homepsick.json'
         $hash = (Get-FileHash -LiteralPath $manifest).Hash
-        (Get-HomepsickLinkPlan -CastleName configs -AllowOutsideHome).Errors.Code | Should -Contain 'InvalidDestination'
-        { Enable-HomepsickCastle -CastleName configs -AllowOutsideHome -Batch } | Should -Throw '*another platform*'
+        (Get-HomepsickLinkPlan -CastleName configs -MachineFacts $facts -AllowOutsideHome).Errors.Code | Should -Contain 'InvalidDestination'
+        { Enable-HomepsickCastle -CastleName configs -MachineFacts $facts -AllowOutsideHome -Batch } | Should -Throw '*another platform*'
         (Get-FileHash -LiteralPath $manifest).Hash | Should -Be $hash
         Test-Path -LiteralPath (Join-Path $env:HOME 'settings') | Should -BeFalse
     }

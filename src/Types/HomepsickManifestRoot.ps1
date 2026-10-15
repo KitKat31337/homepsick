@@ -5,6 +5,7 @@ class HomepsickManifestRoot {
     [string]$Target
     [string]$Into
     [System.Collections.IDictionary]$When = @{}
+    [string[]]$DestinationOS = @()
     [int]$CalculatedPriority
     [bool]$PriorityOverridden
     [int]$Priority

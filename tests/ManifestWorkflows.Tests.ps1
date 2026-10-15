@@ -86,6 +86,44 @@ Describe 'Clone and pull with manifests' {
         Get-Content -LiteralPath (Join-Path $env:HOME '.config/editor/example') | Should -Be 'initial'
     }
 
+    It 'clones and pulls a mixed Windows and POSIX manifest while foreign destinations stay inactive' {
+        # Use a real native absolute destination beneath TestDrive and an absolute
+        # literal for the other OS. Neither the foreign drive/path nor its contents
+        # should be needed to clone, validate, pull, or link this castle.
+        $nativeOS = if ($IsWindows) { 'windows' } else { 'linux' }
+        $otherOS = if ($IsWindows) { 'linux' } else { 'windows' }
+        $outside = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        $destinations = @{
+            nativeConfig = @{ path = $outside; outsideHome = $true }
+            otherConfig = @{ path = $(if ($IsWindows) { '/var/lib/homepsick-path-tests/unused' } else { 'Q:\Homepsick Path Tests\unused' }); outsideHome = $true }
+        }
+        Add-WorkflowFile $source 'other/unused' 'other platform'
+        $roots = @(
+            @{ source = 'editor'; target = 'nativeConfig'; when = @{ os = $nativeOS } }
+            @{ source = 'other'; target = 'otherConfig'; when = @{ os = $otherOS } }
+        )
+        Set-WorkflowManifest $source $roots $destinations
+        Commit-WorkflowFiles $source
+        Test-Path -LiteralPath $outside | Should -BeFalse
+        $castle = New-HomepsickCastle -Clone -GitUrl $source -Link -Batch -AllowOutsideHome
+        Get-Content -LiteralPath (Join-Path $outside 'example') | Should -Be 'initial'
+        (Test-HomepsickManifest -CastleName $castle.CastleName).IsValid | Should -BeTrue
+        $destinations.otherConfig.path += '/still absent'
+        Set-WorkflowManifest $source $roots $destinations
+        Add-WorkflowFile $source 'editor/new' 'pulled settings'
+        Commit-WorkflowFiles $source
+        Update-HomepsickCastle -CastleName $castle.CastleName -Link -Batch -AllowOutsideHome
+        $link = Join-Path $outside 'new'
+        (Get-Item -LiteralPath $link -Force).LinkType | Should -Be 'SymbolicLink'
+        Get-Content -LiteralPath $link | Should -Be 'pulled settings'
+        $plan = Get-HomepsickLinkPlan -CastleName $castle.CastleName -AllowOutsideHome
+        $plan.IsValid | Should -BeTrue
+        $plan.Candidates.RepositoryRelativePath | Should -Not -Contain 'other/unused'
+        $plan.Entries | Where-Object Entry -eq 'roots[1]' | Select-Object -ExpandProperty Selected | Should -BeFalse
+        $manifest = Get-Content -LiteralPath (Join-Path $castle.CastlePath 'homepsick.json') -Raw | ConvertFrom-Json
+        $manifest.destinations.otherConfig.path | Should -BeExactly $destinations.otherConfig.path
+    }
+
     It 'honors <Answer> at the initial clone prompt for a manifest-only castle' -ForEach @(
         @{ Answer = 'Y'; Linked = $true }
         @{ Answer = 'N'; Linked = $false }
