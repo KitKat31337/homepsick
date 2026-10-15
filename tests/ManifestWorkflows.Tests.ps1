@@ -294,19 +294,22 @@ Describe 'External destination safeguards' {
     }
 
     It 'updates only a verified managed link in an external location' {
+        $nativeOS = if ($IsWindows) { 'windows' } else { 'linux' }
+        $baseFacts = @{ os = $nativeOS; host = 'base' }
+        $overlayFacts = @{ os = $nativeOS; host = 'overlay' }
         Add-WorkflowFile $castle.CastlePath 'overlay/example' 'overlay'
         & git -C $castle.CastlePath add .
         Set-WorkflowManifest $castle.CastlePath @(
             @{ source = 'system'; target = 'systemConfig' }
-            @{ source = 'overlay'; target = 'systemConfig'; when = @{ os = 'linux' } }
+            @{ source = 'overlay'; target = 'systemConfig'; when = @{ host = 'overlay' } }
         ) $destinations
-        Enable-HomepsickCastle -CastleName configs -MachineFacts @{ os = 'windows' } -AllowOutsideHome -Batch
-        (Get-HomepsickLinkPlan -CastleName configs -MachineFacts @{ os = 'linux' } -AllowOutsideHome).Winners.ExistingState | Should -Be 'ManagedLink'
-        Enable-HomepsickCastle -CastleName configs -MachineFacts @{ os = 'linux' } -AllowOutsideHome -Batch -WhatIf
+        Enable-HomepsickCastle -CastleName configs -MachineFacts $baseFacts -AllowOutsideHome -Batch
+        (Get-HomepsickLinkPlan -CastleName configs -MachineFacts $overlayFacts -AllowOutsideHome).Winners.ExistingState | Should -Be 'ManagedLink'
+        Enable-HomepsickCastle -CastleName configs -MachineFacts $overlayFacts -AllowOutsideHome -Batch -WhatIf
         Get-Content -LiteralPath (Join-Path $outside 'example') | Should -Be 'system'
-        Enable-HomepsickCastle -CastleName configs -MachineFacts @{ os = 'linux' } -AllowOutsideHome -Batch
+        Enable-HomepsickCastle -CastleName configs -MachineFacts $overlayFacts -AllowOutsideHome -Batch
         Get-Content -LiteralPath (Join-Path $outside 'example') | Should -Be 'overlay'
-        Enable-HomepsickCastle -CastleName configs -MachineFacts @{ os = 'windows' } -AllowOutsideHome -Batch
+        Enable-HomepsickCastle -CastleName configs -MachineFacts $baseFacts -AllowOutsideHome -Batch
         Get-Content -LiteralPath (Join-Path $outside 'example') | Should -Be 'system'
     }
 
