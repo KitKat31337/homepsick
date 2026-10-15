@@ -1,7 +1,10 @@
+# Exercises schema diagnostics and filesystem boundaries through read-only public
+# validation/preview, checking that rejected input never changes source or destination data.
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../src/Homepsick.psd1') -Force
     $script:previousHome = $env:HOME
     function Write-ValidationManifest {
+        # Keep invalid schema values intact for public validation rather than pre-normalizing them.
         param($Value)
         $Value | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $castle.CastlePath 'homepsick.json')
     }
@@ -24,6 +27,9 @@ Describe 'Read-only manifest validation and path safety' {
         @{ Label = 'root string'; Manifest = @{ version = 1; roots = @('home') }; Code = 'InvalidRoot' }
         @{ Label = 'unknown property'; Manifest = @{ version = 1; roots = @(); typo = 1 }; Code = 'UnknownProperty' }
         @{ Label = 'destinations array'; Manifest = @{ version = 1; roots = @(); destinations = @('home') }; Code = 'InvalidDestinations' }
+        @{ Label = 'nonobject destination'; Manifest = @{ version = 1; roots = @(); destinations = @{ editor = 5 } }; Code = 'InvalidDestination' }
+        @{ Label = 'nonstring destination path'; Manifest = @{ version = 1; roots = @(); destinations = @{ editor = @{ path = 5 } } }; Code = 'InvalidDestinationPath' }
+        @{ Label = 'unknown destination property'; Manifest = @{ version = 1; roots = @(); destinations = @{ editor = @{ path = '~/editor'; typo = 1 } } }; Code = 'UnknownProperty' }
         @{ Label = 'home destination redefinition'; Manifest = @{ version = 1; roots = @(); destinations = @{ home = @{ path = '~/test' } } }; Code = 'InvalidDestination' }
         @{ Label = 'unsafe absolute source'; Manifest = @{ version = 1; roots = @(@{ source = '/home'; target = 'home' }) }; Code = 'InvalidSource' }
         @{ Label = 'source traversal'; Manifest = @{ version = 1; roots = @(@{ source = '../other'; target = 'home' }) }; Code = 'InvalidSource' }
@@ -33,6 +39,7 @@ Describe 'Read-only manifest validation and path safety' {
         @{ Label = 'reserved Git source'; Manifest = @{ version = 1; roots = @(@{ source = '.git'; target = 'home' }) }; Code = 'InvalidSource' }
         @{ Label = 'reserved device source'; Manifest = @{ version = 1; roots = @(@{ source = 'CON'; target = 'home' }) }; Code = 'InvalidSource' }
         @{ Label = 'unknown target'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'missing' }) }; Code = 'UnknownTarget' }
+        @{ Label = 'unknown root property'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; typo = 1 }) }; Code = 'UnknownProperty' }
         @{ Label = 'into traversal'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; into = '../outside' }) }; Code = 'InvalidInto' }
         @{ Label = 'into absolute path'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; into = '/etc' }) }; Code = 'InvalidInto' }
         @{ Label = 'into wildcard'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; into = 'folder*' }) }; Code = 'InvalidInto' }
@@ -40,6 +47,7 @@ Describe 'Read-only manifest validation and path safety' {
         @{ Label = 'string priority'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; priority = '100' }) }; Code = 'InvalidPriority' }
         @{ Label = 'priority overflow'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; priority = 2147483648 }) }; Code = 'InvalidPriority' }
         @{ Label = 'unknown condition'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; when = @{ command = 'pwsh' } }) }; Code = 'UnknownCondition' }
+        @{ Label = 'nonobject conditions'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; when = @('linux') }) }; Code = 'InvalidConditions' }
         @{ Label = 'empty condition array'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; when = @{ os = @() } }) }; Code = 'InvalidConditionValue' }
         @{ Label = 'mixed condition array'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; when = @{ os = @('linux', 1) } }) }; Code = 'InvalidConditionValue' }
         @{ Label = 'duplicate condition values'; Manifest = @{ version = 1; roots = @(@{ source = 'home'; target = 'home'; when = @{ os = @('linux', 'LINUX') } }) }; Code = 'DuplicateConditionValue' }
@@ -75,6 +83,8 @@ Describe 'Read-only manifest validation and path safety' {
         (Get-FileHash -LiteralPath $path).Hash | Should -Be $hash
     }
 
+    # Empty roots cannot prove a file collision, but their conditions can already
+    # establish a potential overlap worth surfacing before those files are added.
     It 'reports potentially ambiguous empty overlays with entry identifiers' {
         Write-ValidationManifest @{ version = 1; roots = @(@{ source = 'one'; target = 'home'; when = @{ windowsRelease = '11' } }, @{ source = 'two'; target = 'home'; when = @{ windowsEdition = 'pro' } }) }
         $result = Test-HomepsickManifest -CastleName configs -MachineFacts @{ os = 'linux' }

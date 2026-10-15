@@ -1,4 +1,5 @@
 function Test-PathCommand {
+    # Returns whether an external executable is available on PATH.
     [CmdletBinding()]
     [OutputType([bool])]
     param(

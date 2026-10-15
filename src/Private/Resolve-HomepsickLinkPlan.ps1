@@ -1,24 +1,9 @@
-function Get-HomepsickExistingLinkState {
-    param([object]$Candidate, [object[]]$Mappings, [string]$RepositoryPath)
-    $item = Get-Item -LiteralPath $Candidate.DestinationPath -Force -ErrorAction SilentlyContinue
-    if (-not $item) { return 'Missing' }
-    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
-    if ($item.LinkType -eq 'SymbolicLink') {
-        $target = [IO.Path]::GetFullPath([IO.Path]::Combine([IO.Path]::GetDirectoryName($Candidate.DestinationPath), @($item.Target)[0]))
-        if ([string]::Equals($target, $Candidate.SourcePath, $comparison)) { return 'AlreadyLinked' }
-        foreach ($mapping in $Mappings) {
-            if (-not (Test-HomepsickContainedPath -Parent $mapping.SourcePath -Path $target)) { continue }
-            $relative = [IO.Path]::GetRelativePath($mapping.SourcePath, $target)
-            $mapped = [IO.Path]::GetFullPath([IO.Path]::Combine($mapping.DestinationPath, $relative))
-            if ([string]::Equals($mapped, $Candidate.DestinationPath, $comparison) -and
-                -not (Get-HomepsickPathObstacle -Path $target -StopAt $RepositoryPath)) { return 'ManagedLink' }
-        }
-    }
-    return 'Conflict'
-}
-
 function Resolve-HomepsickLinkPlan {
+    # Shared, read-only engine for preview, validation, tracking, and linking.
+    # Returns a HomepsickLinkPlan with selection reasons, all candidates, resolved
+    # winners, and diagnostics. Errors invalidate the entire castle's execution.
     [CmdletBinding()]
+    [OutputType([HomepsickLinkPlan])]
     param(
         [Parameter(Mandatory)][string]$RepositoryPath,
         [System.Collections.IDictionary]$MachineFacts,
@@ -28,30 +13,37 @@ function Resolve-HomepsickLinkPlan {
     $RepositoryPath = [IO.Path]::GetFullPath($RepositoryPath)
     $homePath = [IO.Path]::GetFullPath((Get-HomePath))
     $manifest = Get-HomepsickManifest $RepositoryPath
-    $warnings = [Collections.Generic.List[object]]::new()
+    $warnings = [Collections.Generic.List[HomepsickDiagnostic]]::new()
     foreach ($warning in $manifest.Warnings) { $warnings.Add($warning) }
     $detected = Get-HomepsickMachineFact -MachineFacts $MachineFacts
     $entries = @(Get-HomepsickRootSelection -Roots $manifest.Roots -Facts $detected.Facts)
-    $errors = [Collections.Generic.List[object]]::new()
+    $errors = [Collections.Generic.List[HomepsickDiagnostic]]::new()
     foreach ($errorItem in $manifest.Errors) { $errors.Add($errorItem) }
-    $candidates = [Collections.Generic.List[object]]::new()
-    $mappings = [Collections.Generic.List[object]]::new()
+    $candidates = [Collections.Generic.List[HomepsickLinkCandidate]]::new()
+    $mappings = [Collections.Generic.List[HomepsickLinkMapping]]::new()
     $addError = {
         param($Code, $Entries, $Message)
-        $errors.Add([pscustomobject]@{ Severity = 'Error'; Code = $Code; Entries = @($Entries); Message = $Message })
+        $errors.Add([HomepsickDiagnostic]@{
+            Severity = 'Error'; Code = $Code; Entries = @($Entries); Message = $Message
+        })
     }
+    # Build candidates from the index, never a filesystem walk. Empty or skipped
+    # sources still get useful diagnostics without making untracked files linkable.
     if (-not $errors.Count -and $entries.Count) {
         $tracked = @(Get-HomepsickTrackedFile -RepositoryPath $RepositoryPath -AllRoots)
         if ($manifest.HasManifest) {
             foreach ($root in @($manifest.Roots | Where-Object { -not $_.Implicit })) {
                 $sourcePath = [IO.Path]::Combine($RepositoryPath, $root.Source)
+                $sourcePrefix = $root.Source + '/'
                 $linkable = @($tracked | Where-Object {
-                    $_.RepositoryRelativePath.StartsWith($root.Source + '/', [StringComparison]::Ordinal) -and
-                    (Test-HomepsickRelativePath $_.RepositoryRelativePath.Substring($root.Source.Length + 1)) -and
-                    $null -eq (Get-HomepsickSourceIssue -Path $_.SourcePath -RepositoryPath $RepositoryPath)
+                    if ($_.RepositoryRelativePath.StartsWith($sourcePrefix, [StringComparison]::Ordinal)) {
+                        $relativePath = $_.RepositoryRelativePath.Substring($sourcePrefix.Length)
+                        (Test-HomepsickRelativePath $relativePath) -and
+                            $null -eq (Get-HomepsickSourceIssue -Path $_.SourcePath -RepositoryPath $RepositoryPath)
+                    }
                 })
                 if ((Test-Path -LiteralPath $sourcePath -PathType Container) -and -not $linkable.Count) {
-                    $warnings.Add([pscustomobject]@{
+                    $warnings.Add([HomepsickDiagnostic]@{
                         Severity = 'Warning'; Code = 'NoTrackedFiles'; Entries = @($root.Entry)
                         Message = "Source directory '$($root.Source)' has no Git-tracked linkable files."
                     })
@@ -59,27 +51,33 @@ function Resolve-HomepsickLinkPlan {
             }
         }
         foreach ($entry in $entries) {
-            # Even skipped roots can own a link from a previous selection. Verify the
-            # source-to-destination relationship before replacing such a link.
+            # Record current mappings for inactive roots too. Existing-link ownership
+            # is inferred from today's declarations and target, without stored history.
             try {
-                $destinationBase = if ($entry.Target -eq 'home') { $homePath }
-                    else { Resolve-HomepsickDestination -Path $manifest.Destinations[$entry.Target].Path -HomePath $homePath }
-                if ($entry.Into) { $destinationBase = [IO.Path]::GetFullPath([IO.Path]::Combine($destinationBase, $entry.Into)) }
+                $destinationBase = if ($entry.Target -eq 'home') {
+                    $homePath
+                }
+                else {
+                    Resolve-HomepsickDestination -Path $manifest.Destinations[$entry.Target].Path -HomePath $homePath
+                }
+                if ($entry.Into) {
+                    $destinationBase = [IO.Path]::GetFullPath([IO.Path]::Combine($destinationBase, $entry.Into))
+                }
             }
             catch {
                 if ($entry.Selected) { & $addError InvalidDestination $entry.Entry $_.Exception.Message }
                 continue
             }
             $sourceBase = [IO.Path]::GetFullPath([IO.Path]::Combine($RepositoryPath, $entry.Source))
-            $mappings.Add([pscustomobject]@{ SourcePath = $sourceBase; DestinationPath = $destinationBase })
-            $entry | Add-Member DestinationPath $destinationBase
+            $mappings.Add([HomepsickLinkMapping]@{ SourcePath = $sourceBase; DestinationPath = $destinationBase })
+            $entry.DestinationPath = $destinationBase
             if (-not $entry.Selected) { continue }
             $outside = -not (Test-HomepsickContainedPath -Parent $homePath -Path $destinationBase -AllowEqual)
             if ($outside -and -not $manifest.Destinations[$entry.Target].OutsideHome) {
                 & $addError OutsideHomeDeclaration $entry.Entry 'Resolved destination is outside home without outsideHome: true.'
                 continue
             }
-            $entry | Add-Member OutsideHome $outside
+            $entry.OutsideHome = $outside
             $sourceComparer = if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }
             $seenSources = [Collections.Generic.HashSet[string]]::new($sourceComparer)
             foreach ($file in $tracked) {
@@ -96,7 +94,10 @@ function Resolve-HomepsickLinkPlan {
                         continue
                     }
                     $sourceIssue = Get-HomepsickSourceIssue -Path $source -RepositoryPath $RepositoryPath
-                    if ($sourceIssue) { & $addError $sourceIssue.Code $entry.Entry $sourceIssue.Message; continue }
+                    if ($sourceIssue) {
+                        & $addError $sourceIssue.Code $entry.Entry $sourceIssue.Message
+                        continue
+                    }
                     if (Test-HomepsickContainedPath -Parent (Get-HomepsickPath -Root) -Path $destination -AllowEqual) {
                         & $addError CastleStorageDestination $entry.Entry "Destination '$destination' is inside Homepsick's castle storage."
                         continue
@@ -106,7 +107,7 @@ function Resolve-HomepsickLinkPlan {
                         continue
                     }
                 }
-                $candidates.Add([pscustomobject]@{
+                $candidates.Add([HomepsickLinkCandidate]@{
                     Entry = $entry.Entry; SourcePath = $source; RepositoryRelativePath = $file.RepositoryRelativePath
                     RelativePath = $relative; DestinationPath = $destination; Target = $entry.Target
                     Priority = $entry.Priority; CalculatedPriority = $entry.CalculatedPriority
@@ -117,11 +118,14 @@ function Resolve-HomepsickLinkPlan {
             }
         }
     }
-    # Use the executing filesystem's comparison rules, even with synthetic OS facts.
+    # Arbitrate only within this castle. Use the executing filesystem's comparison
+    # rules even with synthetic OS facts; order must never break a highest-score tie.
     $comparer = if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }
-    $groups = [Collections.Generic.Dictionary[string,object]]::new($comparer)
+    $groups = [Collections.Generic.Dictionary[string, Collections.Generic.List[HomepsickLinkCandidate]]]::new($comparer)
     foreach ($candidate in $candidates) {
-        if (-not $groups.ContainsKey($candidate.DestinationPath)) { $groups[$candidate.DestinationPath] = [Collections.Generic.List[object]]::new() }
+        if (-not $groups.ContainsKey($candidate.DestinationPath)) {
+            $groups[$candidate.DestinationPath] = [Collections.Generic.List[HomepsickLinkCandidate]]::new()
+        }
         $groups[$candidate.DestinationPath].Add($candidate)
     }
     foreach ($group in $groups.Values) {
@@ -138,21 +142,32 @@ function Resolve-HomepsickLinkPlan {
             }
             else { $candidate.Status = 'Winner' }
         }
-        if ($leaders.Count -gt 1) { & $addError PriorityTie $leaders.Entry "Equal priority candidates for '$($leaders[0].DestinationPath)': $($leaders.Entry -join ', ')." }
+        if ($leaders.Count -gt 1) {
+            $message = "Equal priority candidates for '$($leaders[0].DestinationPath)': $($leaders.Entry -join ', ')."
+            & $addError PriorityTie $leaders.Entry $message
+        }
     }
+    # A winning file cannot also be an ancestor directory of another winner.
+    # Index paths once, then walk ancestors rather than comparing every file pair.
     $winners = @($candidates | Where-Object Status -eq Winner)
-    $winnerPaths = [Collections.Generic.Dictionary[string,object]]::new($comparer)
+    $winnerPaths = [Collections.Generic.Dictionary[string, HomepsickLinkCandidate]]::new($comparer)
     foreach ($candidate in $winners) { $winnerPaths.Add($candidate.DestinationPath, $candidate) }
     foreach ($candidate in $winners) {
         $ancestor = [IO.Path]::GetDirectoryName($candidate.DestinationPath)
         while ($ancestor) {
             if ($winnerPaths.ContainsKey($ancestor)) {
                 $other = $winnerPaths[$ancestor]
-                & $addError DestinationOverlap @($candidate.Entry, $other.Entry) "A file destination contains another file destination: '$($candidate.DestinationPath)' and '$($other.DestinationPath)'."
+                $message = "A file destination contains another file destination: '$($candidate.DestinationPath)' and '$($other.DestinationPath)'."
+                & $addError DestinationOverlap @($candidate.Entry, $other.Entry) $message
             }
             $ancestor = [IO.Path]::GetDirectoryName($ancestor)
         }
-        $candidate.ExistingState = Get-HomepsickExistingLinkState -Candidate $candidate -Mappings $mappings -RepositoryPath $RepositoryPath
+    }
+    # Classify existing destinations for both preview and execution. Conflicts are
+    # data, not validation failures: linking applies the established prompt switches.
+    foreach ($candidate in $winners) {
+        $candidate.ExistingState = Get-HomepsickExistingLinkState `
+            -Candidate $candidate -Mappings $mappings -RepositoryPath $RepositoryPath
         if ($manifest.HasManifest) {
             $obstacle = Get-HomepsickPathObstacle -Path $candidate.DestinationPath
             if ($obstacle) {
@@ -169,7 +184,7 @@ function Resolve-HomepsickLinkPlan {
             } else { 'Existing destination conflicts with the proposed link.' }
         }
     }
-    [pscustomobject]@{
+    [HomepsickLinkPlan]@{
         RepositoryPath = $RepositoryPath; HasManifest = $manifest.HasManifest
         MachineFacts = $detected.Facts; FactNotes = $detected.Notes; Entries = $entries
         Candidates = @($candidates); Winners = $winners; RootMappings = @($mappings)

@@ -1,5 +1,9 @@
 function Invoke-HomepsickGit {
+    # Runs Git without shell evaluation and returns HomepsickGitResult
+    # (ExitCode, Output, Error). Nonzero exits throw unless AllowFailure is set.
+    # Optional UTF-8 stdin supports exact per-path Git index restoration.
     [CmdletBinding()]
+    [OutputType([HomepsickGitResult])]
     param(
         [Parameter(Mandatory)][string]$RepositoryPath,
         [Parameter(Mandatory)][string[]]$Arguments,
@@ -30,7 +34,7 @@ function Invoke-HomepsickGit {
             $process.StandardInput.Close()
         }
         $process.WaitForExit()
-        $result = [pscustomobject]@{
+        $result = [HomepsickGitResult]@{
             ExitCode = $process.ExitCode
             Output   = $stdout.GetAwaiter().GetResult()
             Error    = $stderr.GetAwaiter().GetResult()

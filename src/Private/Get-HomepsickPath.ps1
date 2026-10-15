@@ -1,4 +1,5 @@
 function Get-HomepsickPath {
+    # Returns Homepsick storage or its repos directory beneath the configured home.
     [CmdletBinding(DefaultParameterSetName="None")]
     [OutputType([string])]
     param(

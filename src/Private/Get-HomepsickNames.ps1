@@ -1,4 +1,5 @@
 function Get-HomepsickNames {
+    # Emits installed castle names from Git repositories, ignoring unrelated directories.
     [CmdletBinding()]
     param()
 

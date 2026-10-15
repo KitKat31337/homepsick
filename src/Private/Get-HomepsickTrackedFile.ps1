@@ -1,5 +1,10 @@
 function Get-HomepsickTrackedFile {
+    # Enumerates Git-tracked files, recursively through initialized submodules.
+    # Returns HomepsickTrackedFile (home-relative) for legacy callers; AllRoots
+    # returns HomepsickRepositoryFile with the full repository-relative path.
+    # Index stages remain visible here; the planner deduplicates source candidates.
     [CmdletBinding()]
+    [OutputType([HomepsickTrackedFile], [HomepsickRepositoryFile])]
     param(
         [Parameter(Mandatory)][string]$RepositoryPath,
         [string]$Prefix = '',
@@ -22,12 +27,12 @@ function Get-HomepsickTrackedFile {
         elseif ($AllRoots -or $relative.StartsWith(('home' + [IO.Path]::DirectorySeparatorChar), [StringComparison]::Ordinal)) {
             $path = if ($AllRoots) { $relative } else { $relative.Substring(5) }
             if ($AllRoots) {
-                [pscustomobject]@{
+                [HomepsickRepositoryFile]@{
                     RelativePath = $path; SourcePath = (Join-Path $RepositoryPath $Matches.path)
                     RepositoryRelativePath = ($Prefix + $Matches.path)
                 }
             }
-            else { [pscustomobject]@{ RelativePath = $path; SourcePath = (Join-Path $RepositoryPath $Matches.path) } }
+            else { [HomepsickTrackedFile]@{ RelativePath = $path; SourcePath = (Join-Path $RepositoryPath $Matches.path) } }
         }
     }
 }

@@ -1,18 +1,23 @@
+# Integrates clone, pull, submodules, prompts, and external destinations with real
+# local Git remotes and links. No fixture depends on a network repository or elevated writes.
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../src/Homepsick.psd1') -Force
     $script:previousHome = $env:HOME
     function Set-WorkflowManifest {
+        # Rewrite a remote manifest so pulls exercise declaration-only changes as well as file changes.
         param([string]$Repository, [object[]]$Roots, $Destinations = @{})
         @{ version = 1; roots = @($Roots); destinations = $Destinations } | ConvertTo-Json -Depth 12 |
             Set-Content -LiteralPath (Join-Path $Repository 'homepsick.json')
     }
     function Add-WorkflowFile {
+        # Create remote content without staging it until the fixture commit boundary.
         param([string]$Repository, [string]$Path, [string]$Value)
         $file = Join-Path $Repository $Path
         New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($file)) -Force | Out-Null
         Set-Content -LiteralPath $file -Value $Value
     }
     function Commit-WorkflowFiles {
+        # Advance the local remote with all fixture changes so pull sees real Git differences.
         param([string]$Repository)
         & git -C $Repository add .
         if ($LASTEXITCODE) { throw 'Failed to stage fixture.' }
@@ -20,6 +25,7 @@ BeforeAll {
         if ($LASTEXITCODE) { throw 'Failed to commit fixture.' }
     }
     function New-WorkflowSource {
+        # Use a local remote with an explicit branch and identity for portable clone/pull tests.
         $source = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         & git init --initial-branch=main $source | Out-Null
         & git -C $source config user.email 'tests@example.invalid'
@@ -27,6 +33,7 @@ BeforeAll {
         return $source
     }
     function Invoke-WorkflowPrompt {
+        # Use a child console host to exercise ShouldContinue decisions without mocking link behavior.
         param([string]$GitUrl, [string]$Answer)
         $childScript = Join-Path $TestDrive 'interactive-clone.ps1'
         @'
@@ -125,6 +132,8 @@ Describe 'Clone and pull with manifests' {
         Get-Content -LiteralPath (Join-Path $env:HOME 'example') | Should -Be 'initial'
     }
 
+    # Mock only the workflow handoff here: real commits and pulls determine whether
+    # the caller offers linking for selected changes and ignores skipped-only changes.
     It 'offers the existing link workflow for a selected modification, but not skipped-root changes' {
         Set-WorkflowManifest $source @(
             @{ source = 'editor'; target = 'home' }
@@ -182,6 +191,8 @@ Describe 'Clone and pull with manifests' {
     }
 }
 
+# External destinations use a sibling of the synthetic home in TestDrive, so
+# opt-in and conflict behavior can be tested without privileged system paths.
 Describe 'External destination safeguards' {
     BeforeEach {
         $env:HOME = Join-Path $TestDrive ([guid]::NewGuid().ToString())

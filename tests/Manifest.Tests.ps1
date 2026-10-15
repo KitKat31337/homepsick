@@ -1,12 +1,16 @@
+# Exercises the shared selection/overlay engine through preview and real links,
+# preserving legacy castles and cross-castle conflict behavior.
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../src/Homepsick.psd1') -Force
     $script:previousHome = $env:HOME
     function Set-TestManifest {
+        # Keep conditions as supplied so scalar and singleton normalization are exercised.
         param($Castle, $Roots, $Destinations = @{})
         @{ version = 1; roots = @($Roots); destinations = $Destinations } | ConvertTo-Json -Depth 12 |
             Set-Content -LiteralPath (Join-Path $Castle.CastlePath 'homepsick.json')
     }
     function Add-TestTrackedFile {
+        # Stage real files; filesystem enumeration alone must not create candidates.
         param($Castle, [string]$Path, [string]$Value = 'settings')
         $file = Join-Path $Castle.CastlePath $Path
         New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($file)) -Force | Out-Null
@@ -35,6 +39,8 @@ Describe 'Manifest selection and shared linking plan' {
         Get-Content -LiteralPath (Join-Path $env:HOME 'example') | Should -Be 'home'
     }
 
+    # Synthetic facts change selection only; all filesystem checks still use the
+    # executing OS, which keeps the same overlay scenarios portable between CI jobs.
     It 'applies AND across fields and OR within arrays, including singleton arrays' {
         Add-TestTrackedFile $castle 'overlay/example'
         Set-TestManifest $castle @(@{ source = 'overlay'; target = 'home'; when = @{ os = @('linux'); distro = @('ubuntu', 'fedora'); distroVersion = '24.04'; distroLike = @('rhel', 'debian'); host = 'machine1' } })
@@ -95,6 +101,8 @@ Describe 'Manifest selection and shared linking plan' {
         ($plan.Entries | Where-Object Source -eq overlay).Reasons -join ' ' | Should -BeLike '*windowsRelease*unavailable*'
     }
 
+    # Competing files, rather than merely overlapping declarations, establish an
+    # actual tie. Reversing declaration order proves there is no order-based winner.
     It 'reports release and edition ties before creating any link, independent of order' {
         Add-TestTrackedFile $castle 'release/example' 'release'
         Add-TestTrackedFile $castle 'edition/example' 'edition'

@@ -1,5 +1,26 @@
 function Invoke-HomepsickCastleRefresh {
-    <# .SYNOPSIS Pulls castles whose last fetch is older than the requested number of days. #>
+    <#
+    .SYNOPSIS
+    Offers to pull castles whose last fetch is older than the requested age.
+    .PARAMETER CastleName
+    Name of one installed castle to check.
+    .PARAMETER All
+    Checks every installed castle. This is the default when CastleName is omitted.
+    .PARAMETER Days
+    Age in days before a castle needs refreshing. Defaults to seven days.
+    .PARAMETER Pull
+    Pulls outdated castles without asking for refresh confirmation.
+    .PARAMETER Batch
+    Suppresses refresh and link prompts. Use Pull to update in batch mode.
+    .PARAMETER Link
+    Links applicable changed content after a pull without an initial link prompt.
+    Existing destination conflicts still follow the ordinary linking policy.
+    .PARAMETER AllowOutsideHome
+    Forwards authorization for explicitly declared external destinations to linking.
+    .EXAMPLE
+    Invoke-HomepsickCastleRefresh -All -Days 7 -Pull -Batch -Link
+    Refreshes outdated castles and links applicable updates without initial prompts.
+    #>
     [CmdletBinding(DefaultParameterSetName = 'All')]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Single')][string]$CastleName,

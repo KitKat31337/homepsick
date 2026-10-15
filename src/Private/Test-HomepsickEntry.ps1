@@ -1,4 +1,5 @@
 function Test-HomepsickEntry {
+    # Returns whether a literal filesystem entry exists, including dangling links.
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$LiteralPath)
 

@@ -1,5 +1,9 @@
 function Get-HomepsickMachineFact {
+    # Returns normalized HomepsickMachineFacts plus acquisition/normalization notes.
+    # Context injects raw platform data; MachineFacts replaces detection completely.
+    # Neither injected mode reads the CI host to fill in unspecified facts.
     [CmdletBinding()]
+    [OutputType([HomepsickMachineFactResult])]
     param(
         [System.Collections.IDictionary]$Context,
         [System.Collections.IDictionary]$MachineFacts
@@ -30,7 +34,7 @@ function Get-HomepsickMachineFact {
                     $system = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
                     $Context.windows = @{
                         ProductType = $system.ProductType; BuildNumber = $system.BuildNumber
-                        Caption = $system.Caption; OperatingSystemSKU = $system.OperatingSystemSKU
+                        OperatingSystemSKU = $system.OperatingSystemSKU
                     }
                 }
                 catch { $notes.Add("Windows product information unavailable: $($_.Exception.Message)") }
@@ -60,10 +64,11 @@ function Get-HomepsickMachineFact {
         }
         elseif ($facts.os -eq 'windows' -and $Context.windows) {
             $system = $Context.windows
-            $facts.windowsRole = switch ([int]$system.ProductType) { 1 { 'workstation' } 2 { 'server' } 3 { 'server' } }
+            $productType = 0
+            [void][int]::TryParse([string]$system.ProductType, [ref]$productType)
+            $facts.windowsRole = switch ($productType) { 1 { 'workstation' } 2 { 'server' } 3 { 'server' } }
             $build = 0
             [void][int]::TryParse([string]$system.BuildNumber, [ref]$build)
-            $caption = [string]$system.Caption
             if ($facts.windowsRole -eq 'server') {
                 # Exact build families avoid misidentifying an unknown future Server release.
                 $serverBuilds = @{ 14393 = 'server-2016'; 17763 = 'server-2019'; 20348 = 'server-2022'; 26100 = 'server-2025' }
@@ -72,18 +77,17 @@ function Get-HomepsickMachineFact {
             elseif ($facts.windowsRole -eq 'workstation') {
                 $windows10Builds = @(10240, 10586, 14393, 15063, 16299, 17134, 17763, 18362, 18363, 19041, 19042, 19043, 19044, 19045)
                 $windows11Builds = @(22000, 22621, 22631, 26100, 26200, 28000)
-                # Some Windows 11 registry/product strings still say Windows 10. Use build
-                # families as well as product information, never just NT's major version.
-                if ($caption -match '\bWindows 11\b' -and $build -ge 22000) { $facts.windowsRelease = '11' }
-                elseif ($caption -notmatch '\bWindows (?:1[2-9]|[2-9][0-9])\b') {
-                    if ($build -in $windows11Builds) { $facts.windowsRelease = '11' }
-                    elseif ($build -in $windows10Builds) { $facts.windowsRelease = '10' }
-                }
+                # Caption is localized, and product strings can lag an upgrade.
+                # Recognize bounded numeric families only: a newer build must be
+                # added deliberately, not guessed from an English marketing name.
+                if ($build -in $windows11Builds) { $facts.windowsRelease = '11' }
+                elseif ($build -in $windows10Builds) { $facts.windowsRelease = '10' }
             }
             # SKU values are language independent. Normalize N, Core, evaluation,
             # workstation, and subscription variants to their edition families.
             # Values: Windows SDK winnt.h PRODUCT_* constants.
-            $sku = [long]$system.OperatingSystemSKU
+            $sku = 0L
+            [void][long]::TryParse([string]$system.OperatingSystemSKU, [ref]$sku)
             $facts.windowsEdition = switch ($sku) {
                 { $_ -in @(2, 3, 5, 26, 97, 98, 99, 100, 101, 111, 113, 115, 116) } { 'home'; break }
                 { $_ -in @(48, 49, 103, 112, 114, 127, 128, 138, 139, 161, 162, 164, 165) } { 'pro'; break }
@@ -91,6 +95,11 @@ function Get-HomepsickMachineFact {
                 { $_ -in @(121, 122) } { 'education'; break }
                 { $_ -in @(7, 13, 36, 40, 79, 144, 146, 148, 160) } { 'standard'; break }
                 { $_ -in @(8, 12, 37, 39, 80, 143, 145, 147, 159, 407, 408, 409) } { 'datacenter'; break }
+            }
+            $unavailable = @('windowsRole', 'windowsRelease', 'windowsEdition' | Where-Object { -not $facts[$_] })
+            if ($unavailable.Count) {
+                $rawProduct = "ProductType='$($system.ProductType)', BuildNumber='$($system.BuildNumber)', OperatingSystemSKU='$($system.OperatingSystemSKU)'"
+                $notes.Add("Windows normalization unavailable for $($unavailable -join ', ') ($rawProduct).")
             }
         }
     }
@@ -104,5 +113,9 @@ function Get-HomepsickMachineFact {
     foreach ($key in @('os', 'host', 'distro', 'distroVersion', 'windowsRole', 'windowsRelease', 'windowsEdition')) {
         if ([string]::IsNullOrEmpty($facts[$key])) { $facts[$key] = $null }
     }
-    [pscustomobject]@{ Facts = [pscustomobject]$facts; Notes = @($notes) }
+    $normalized = [HomepsickMachineFacts]::new()
+    foreach ($key in $facts.Keys) {
+        if ($null -ne $facts[$key]) { $normalized.$key = $facts[$key] }
+    }
+    [HomepsickMachineFactResult]@{ Facts = $normalized; Notes = @($notes) }
 }

@@ -1,18 +1,23 @@
+# Exercises destination-to-root tracking, actual link winners, and per-file rollback.
+# Real Git indexes expose staged-data loss that filesystem assertions alone would miss.
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../src/Homepsick.psd1') -Force
     $script:previousHome = $env:HOME
     function Set-TrackingManifest {
+        # Remove layout assumptions: these fixtures may omit home and reuse conditional sources.
         param([object[]]$Roots, $Destinations = @{})
         @{ version = 1; roots = $Roots; destinations = $Destinations } | ConvertTo-Json -Depth 12 |
             Set-Content -LiteralPath (Join-Path $castle.CastlePath 'homepsick.json')
     }
     function New-TrackingFile {
+        # Create destination-side data or source/index fixtures without implicitly staging them.
         param([string]$Path, [string]$Value = 'user settings')
         New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
         Set-Content -LiteralPath $Path -Value $Value
         return $Path
     }
     function Get-TrackingIndex {
+        # Snapshot staged modes and blob IDs, not just names, to detect lost prior index content.
         (& git -C $castle.CastlePath ls-files --stage) -join "`n"
     }
 }
@@ -37,6 +42,8 @@ Describe 'Tracking into manifest roots' {
         (Get-HomepsickLinkPlan -CastleName configs).Winners.ExistingState | Should -Be 'AlreadyLinked'
     }
 
+    # Supply both platform contexts on each host so root choice never depends on
+    # the CI machine, while link creation still uses native paths.
     It 'selects conditional roots using synthetic <OS> facts on either host' -ForEach @(
         @{ OS = 'windows'; RootName = 'windows'; Facts = @{ os = 'windows'; windowsRelease = '11'; windowsEdition = 'pro' } }
         @{ OS = 'linux'; RootName = 'ubuntu'; Facts = @{ os = 'linux'; distro = 'ubuntu'; distroVersion = '24.04' } }
@@ -98,6 +105,8 @@ Describe 'Tracking into manifest roots' {
         (& git -C $castle.CastlePath diff --cached --name-only) | Should -Be 'editor/settings'
     }
 
+    # Storage intent and link precedence are separate: adding to a lower root
+    # must not bypass a higher-priority tracked file already providing this destination.
     It 'stores the chosen root while linking back to the shared plan winner' {
         Set-TrackingManifest @(@{ source = 'lower'; target = 'home'; priority = 1 }, @{ source = 'higher'; target = 'home'; priority = 2 })
         New-TrackingFile (Join-Path $castle.CastlePath 'higher/settings') 'winning settings' | Out-Null
@@ -161,6 +170,30 @@ Describe 'Tracking into manifest roots' {
         Get-TrackingIndex | Should -BeNullOrEmpty
     }
 
+    It 'validates a directory symlink before moving any files from a directory input' {
+        Set-TrackingManifest @(@{ source = 'editor'; target = 'home'; into = '.config/editor' })
+        $directory = Join-Path $env:HOME '.config/editor'
+        $good = New-TrackingFile (Join-Path $directory 'good')
+        $outside = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        $kept = New-TrackingFile (Join-Path $outside 'keep')
+        New-Item -ItemType SymbolicLink -Path (Join-Path $directory 'linked') -Target $outside | Out-Null
+        { Add-HomepsickFile -CastleName configs -Path $directory } | Should -Throw '*UnsafeTrackingPath*Directory symbolic links*'
+        Get-Content -LiteralPath $good | Should -Be 'user settings'
+        (Get-Item -LiteralPath $good).LinkType | Should -BeNullOrEmpty
+        Get-Content -LiteralPath $kept | Should -Be 'user settings'
+        Get-TrackingIndex | Should -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-Path $castle.CastlePath 'editor') | Should -BeFalse
+    }
+
+    It 'refuses tracking a castle-storage file through a home destination mapping' {
+        Set-TrackingManifest @(@{ source = 'editor'; target = 'home' })
+        $inputFile = New-TrackingFile (Join-Path $castle.CastlePath 'keep')
+        { Add-HomepsickFile -CastleName configs -Path $inputFile } | Should -Throw '*CastleStorageDestination*'
+        Get-Content -LiteralPath $inputFile | Should -Be 'user settings'
+        Get-TrackingIndex | Should -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-Path $castle.CastlePath 'editor') | Should -BeFalse
+    }
+
     It 'rolls back an unsafe relative source link without losing its original target' {
         Set-TrackingManifest @(@{ source = 'editor'; target = 'home'; into = '.config/editor' })
         New-TrackingFile (Join-Path $env:HOME '.config/other') | Out-Null
@@ -175,6 +208,8 @@ Describe 'Tracking into manifest roots' {
         Test-Path -LiteralPath (Join-Path $castle.CastlePath 'editor/settings') | Should -BeFalse
     }
 
+    # Fail at external boundaries after staging, then assert original file contents,
+    # link type, and the entire prior index. Unrelated staged work is part of the contract.
     It 'restores files and unrelated staged work when link creation fails after staging' {
         Set-TrackingManifest @(@{ source = 'editor'; target = 'home' })
         New-TrackingFile (Join-Path $castle.CastlePath 'unrelated') 'unrelated work' | Out-Null
@@ -208,6 +243,8 @@ Describe 'Tracking into manifest roots' {
         { Add-HomepsickFile -CastleName configs -Path $outsideFile -AllowOutsideHome } | Should -Throw '*must be inside the home directory*'
     }
 
+    # Leave a blob in the index after removing its working file. A failed git add
+    # must restore that exact prior blob, not merely unstage the new content.
     It 'restores a preexisting index entry if staging modifies it then fails' {
         New-Item -ItemType Directory -Path $castle.CastleSymRoot | Out-Null
         $stored = New-TrackingFile (Join-Path $castle.CastleSymRoot 'settings') 'previously staged'

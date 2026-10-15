@@ -1,5 +1,29 @@
 function Enable-HomepsickCastle {
-    <# .SYNOPSIS Links Git-tracked castle files using the shared destination plan. #>
+    <#
+    .SYNOPSIS
+    Links Git-tracked castle files using the shared destination plan.
+    .DESCRIPTION
+    Selects applicable roots and links their winning files. Conflicts with other
+    castles retain the ordinary confirmation, skip, and force behavior.
+    .PARAMETER CastleName
+    Name of one installed castle to link.
+    .PARAMETER All
+    Links every installed castle. This is the default when CastleName is omitted.
+    .PARAMETER Force
+    Replaces conflicting individual files or symbolic links without asking.
+    Never replaces a directory tree. Skip takes precedence over Force.
+    .PARAMETER Skip
+    Leaves conflicting files and symbolic links untouched.
+    .PARAMETER Batch
+    Skips conflict prompts and leaves conflicts untouched unless Force is supplied.
+    .PARAMETER AllowOutsideHome
+    Authorizes writes to destinations explicitly declared with outsideHome: true.
+    .PARAMETER MachineFacts
+    A complete synthetic fact context for root selection; omitted facts are unavailable.
+    .EXAMPLE
+    Enable-HomepsickCastle -CastleName dotfiles -Batch -WhatIf
+    Previews linking one castle while skipping existing conflicts.
+    #>
     [CmdletBinding(DefaultParameterSetName = 'All', SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Single')][string]$CastleName,
@@ -47,10 +71,15 @@ function Enable-HomepsickCastle {
                     Write-Verbose "Already linked: $link"
                     continue
                 }
+                # A directory may contain unrelated files; even Force must never
+                # turn one file conflict into recursive deletion. Directory links
+                # can be removed individually without touching their targets.
                 if ($existing.PSIsContainer -and $existing.LinkType -ne 'SymbolicLink') {
                     Write-Warning "[DirectoryConflict] $($file.Entry): Leaving directory '$link' for review; directory trees are never replaced."
                     continue
                 }
+                # Current target + current mapping establish managed ownership,
+                # including mappings inactive on this machine. No history is stored.
                 $managed = $plan.HasManifest -and $state -eq 'ManagedLink'
                 if ($managed) {
                     if (-not $PSCmdlet.ShouldProcess($link, 'Update managed castle link')) { continue }
@@ -60,6 +89,8 @@ function Enable-HomepsickCastle {
                     Remove-Item -LiteralPath $link -Force -ErrorAction Stop
                 }
                 else {
+                    # Skip wins over Force; Batch skips unless Force explicitly
+                    # requests replacement. Cross-castle conflicts use this path.
                     if ($Skip -or ($Batch -and -not $Force)) {
                         Write-Verbose "Skipping existing path: $link"
                         continue
@@ -68,6 +99,8 @@ function Enable-HomepsickCastle {
                         continue
                     }
                     if (-not $PSCmdlet.ShouldProcess($link, 'Replace with castle link')) { continue }
+                    # Confirmation can run user code: recheck parents and the
+                    # current entry before removing the single destination.
                     if ($plan.HasManifest) {
                         $obstacle = Get-HomepsickPathObstacle -Path $link
                         if ($obstacle) { throw $obstacle }

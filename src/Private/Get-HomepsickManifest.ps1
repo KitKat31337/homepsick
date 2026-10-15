@@ -1,30 +1,21 @@
-function Assert-HomepsickJsonProperty {
-    param([System.Text.Json.JsonElement]$Element)
-    if ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Object) {
-        $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-        foreach ($property in $Element.EnumerateObject()) {
-            if (-not $names.Add($property.Name)) { throw "Duplicate JSON property '$($property.Name)'." }
-            Assert-HomepsickJsonProperty $property.Value
-        }
-    }
-    elseif ($Element.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
-        foreach ($item in $Element.EnumerateArray()) { Assert-HomepsickJsonProperty $item }
-    }
-}
-
 function Get-HomepsickManifest {
+    # Validates raw JSON, then returns a normalized HomepsickManifest and diagnostics.
+    # Invalid entries never enter the typed root collection. This is read-only;
+    # actual tracked-file collisions are resolved by Resolve-HomepsickLinkPlan.
     [CmdletBinding()]
+    [OutputType([HomepsickManifest])]
     param([Parameter(Mandatory)][string]$RepositoryPath)
 
-    $issues = [Collections.Generic.List[object]]::new()
-    $roots = [Collections.Generic.List[object]]::new()
-    $destinations = @{}
+    $issues = [Collections.Generic.List[HomepsickDiagnostic]]::new()
+    $roots = [Collections.Generic.List[HomepsickManifestRoot]]::new()
+    $destinations = [Collections.Generic.Dictionary[string, HomepsickDestination]]::new([StringComparer]::OrdinalIgnoreCase)
     $manifestPath = Join-Path $RepositoryPath 'homepsick.json'
     $hasManifest = Test-HomepsickEntry $manifestPath
     $addIssue = {
         param($Severity, $Code, $Entries, $Message)
-        $issues.Add([pscustomobject]@{ Severity = $Severity; Code = $Code; Entries = @($Entries); Message = $Message })
+        $issues.Add([HomepsickDiagnostic]@{ Severity = $Severity; Code = $Code; Entries = @($Entries); Message = $Message })
     }
+    # Validate JSON shape and duplicate keys before normalizing case-insensitive data.
     $data = $null
     if ($hasManifest) {
         try {
@@ -50,11 +41,13 @@ function Get-HomepsickManifest {
             & $addIssue Error UnsupportedVersion @() 'Manifest version must be the integer 1.'
         }
         if ($data.roots -isnot [array]) { & $addIssue Error InvalidRoots @() 'roots must be an array.' }
+        # Destination declarations stay literal; external writes need a separate opt-in.
         if ($data.Contains('destinations') -and $data.destinations -isnot [System.Collections.IDictionary]) {
             & $addIssue Error InvalidDestinations @() 'destinations must be an object.'
         }
         elseif ($data.destinations) {
             foreach ($name in $data.destinations.Keys) {
+                $startErrors = @($issues | Where-Object Severity -eq Error).Count
                 $destination = $data.destinations[$name]
                 if ($name -eq 'home' -or $name -cnotmatch '^[A-Za-z][A-Za-z0-9_-]*$') {
                     & $addIssue Error InvalidDestination @() "Destination name '$name' is invalid or reserved."
@@ -87,9 +80,11 @@ function Get-HomepsickManifest {
                         & $addIssue Error OutsideHomeDeclaration @() "Destination '$name' requires outsideHome: true. Use ~/ for portable home-relative destinations."
                     }
                 }
-                $destinations[$name] = [pscustomobject]@{ Path = $path; OutsideHome = ($destination.outsideHome -eq $true) }
+                if (@($issues | Where-Object Severity -eq Error).Count -ne $startErrors) { continue }
+                $destinations[$name] = [HomepsickDestination]@{ Path = $path; OutsideHome = ($destination.outsideHome -eq $true) }
             }
         }
+        # Validate each raw root before converting it into the shared root contract.
         $index = 0
         foreach ($entry in @($data.roots)) {
             $id = "roots[$index]"
@@ -150,19 +145,22 @@ function Get-HomepsickManifest {
             }
             if (@($issues | Where-Object Severity -eq Error).Count -ne $startErrors) { continue }
             $calculated = Get-HomepsickRootPriority $when
-            $roots.Add([pscustomobject]@{
+            $roots.Add([HomepsickManifestRoot]@{
                 Entry = $id; Source = $entry.source; Target = $entry.target; Into = [string]$entry.into; When = $when
                 CalculatedPriority = $calculated; PriorityOverridden = $entry.Contains('priority')
                 Priority = if ($entry.Contains('priority')) { [int]$entry.priority } else { $calculated }; Implicit = $false
             })
         }
     }
+    # An explicit home declaration replaces the implicit legacy root, never duplicates it.
     if (-not @($roots | Where-Object Source -eq 'home').Count -and (Test-Path -LiteralPath (Join-Path $RepositoryPath 'home') -PathType Container)) {
-        $roots.Insert(0, [pscustomobject]@{
+        $roots.Insert(0, [HomepsickManifestRoot]@{
             Entry = 'implicit home'; Source = 'home'; Target = 'home'; Into = ''; When = @{}
             Priority = 0; CalculatedPriority = 0; PriorityOverridden = $false; Implicit = $true
         })
     }
+    # Check source safety and cross-root relationships independently of this machine.
+    # Potential overlaps warn here; concrete highest-priority file ties fail in the plan.
     if ($hasManifest) {
         foreach ($root in $roots) {
             $sourcePath = [IO.Path]::Combine($RepositoryPath, $root.Source)
@@ -225,7 +223,7 @@ function Get-HomepsickManifest {
             }
         }
     }
-    [pscustomobject]@{
+    [HomepsickManifest]@{
         HasManifest = [bool]$hasManifest; Roots = @($roots); Destinations = $destinations
         Errors = @($issues | Where-Object Severity -eq Error); Warnings = @($issues | Where-Object Severity -eq Warning)
     }

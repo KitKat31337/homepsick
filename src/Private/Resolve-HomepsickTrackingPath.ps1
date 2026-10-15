@@ -1,6 +1,11 @@
 function Resolve-HomepsickTrackingPath {
+    # Reverse-maps a destination file to one selected source root, returning a
+    # HomepsickTrackingPath or throwing before any writes. Priority chooses existing
+    # link winners, not where new content belongs: overlapping mappings require
+    # an explicit Root even when one entry has a higher linking priority.
+    [OutputType([HomepsickTrackingPath])]
     param(
-        [Parameter(Mandatory)][object]$Plan,
+        [Parameter(Mandatory)][HomepsickLinkPlan]$Plan,
         [Parameter(Mandatory)][string]$Path,
         [string]$Root,
         [switch]$AllowOutsideHome
@@ -39,7 +44,7 @@ function Resolve-HomepsickTrackingPath {
     }
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
     if ($item.PSIsContainer) { throw "[UnsafeTrackingPath] $($choice.Entry): Directory symbolic links cannot be tracked in manifest castles." }
-    [pscustomobject]@{
+    [HomepsickTrackingPath]@{
         Entry = $choice.Entry; SourcePath = $source; RelativePath = $relative
         RepositoryRelativePath = "$($choice.Source)/$relative"
     }

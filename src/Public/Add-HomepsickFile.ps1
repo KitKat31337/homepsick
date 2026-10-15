@@ -70,7 +70,7 @@ function Add-HomepsickFile {
                     Resolve-HomepsickTrackingPath -Plan $plan -Path $file.FullName -Root $Root -AllowOutsideHome:$AllowOutsideHome
                 } else {
                     $fileRelative = [IO.Path]::GetRelativePath($homePath, $file.FullName)
-                    [pscustomobject]@{
+                    [HomepsickTrackingPath]@{
                         SourcePath = (Join-Path $castle.CastleSymRoot $fileRelative)
                         RelativePath = $fileRelative; RepositoryRelativePath = ('home/' + $fileRelative.Replace('\', '/'))
                     }
@@ -119,6 +119,8 @@ function Add-HomepsickFile {
                         if ($obstacle) { throw "[UnsafeTrackingPath] $($operation.Mapping.Entry): $obstacle" }
                     }
                 }
+                # Snapshot only this path's stages; rollback must preserve both
+                # its preexisting index content and all unrelated staged work.
                 $indexBefore = (Invoke-HomepsickGit -RepositoryPath $gitRepository -Arguments @('ls-files', '--stage', '-z', '--', $gitRelative)).Output
                 New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null
                 $relativeTarget = [IO.Path]::GetRelativePath((Split-Path -Parent $file.FullName), $destination)
@@ -128,6 +130,9 @@ function Add-HomepsickFile {
                 $linkCreated = $false
                 $stagingAttempted = $false
                 try {
+                    # Moving a relative symlink changes its meaning. Rebase its
+                    # target at the castle location, retaining the original text
+                    # so rollback can restore the exact destination-side link.
                     if ($originalLinkTarget -and -not [IO.Path]::IsPathRooted($originalLinkTarget)) {
                         $originalTarget = [IO.Path]::GetFullPath([IO.Path]::Combine((Split-Path -Parent $file.FullName), $originalLinkTarget))
                         $newTarget = [IO.Path]::GetRelativePath($parent, $originalTarget)
@@ -144,6 +149,9 @@ function Add-HomepsickFile {
                     if ($hasManifest) {
                         $stagingAttempted = $true
                         Invoke-HomepsickGit -RepositoryPath $gitRepository -Arguments @('add', '--', $gitRelative) | Out-Null
+                        # Only staged files are candidates. Rebuild after staging
+                        # and link the actual winner, which may be another root
+                        # than the one explicitly chosen for storing this new file.
                         $updatedPlan = Resolve-HomepsickLinkPlan -RepositoryPath $castle.CastlePath -MachineFacts $MachineFacts -AllowOutsideHome:$AllowOutsideHome
                         if (-not $updatedPlan.IsValid) {
                             throw "Invalid tracking link plan: $((Format-HomepsickDiagnostic $updatedPlan.Errors) -join [Environment]::NewLine)"

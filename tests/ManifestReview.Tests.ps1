@@ -1,3 +1,7 @@
+# Regressions for review findings: consistent conflict switches, diagnostics,
+# stale-link retention, and discoverable public help. External paths stay in TestDrive.
+# Compare the same conflict matrix inside and outside home. Directory-link target
+# contents are asserted separately so removing one link cannot mask recursive deletion.
 BeforeDiscovery {
     $conflictCases = foreach ($location in @('home', 'external')) {
         foreach ($kind in @('file', 'file symlink', 'directory symlink', 'directory')) {
@@ -18,11 +22,13 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../src/Homepsick.psd1') -Force
     $script:previousHome = $env:HOME
     function Set-ReviewManifest {
+        # Make competing mappings and opt-in declarations explicit for each regression.
         param([object[]]$Roots, $Destinations = @{})
         @{ version = 1; roots = $Roots; destinations = $Destinations } | ConvertTo-Json -Depth 12 |
             Set-Content -LiteralPath (Join-Path $castle.CastlePath 'homepsick.json')
     }
     function Add-ReviewFile {
+        # Stage source files so conflict fixtures exercise actual link winners.
         param([string]$Path, [string]$Value = 'castle settings')
         $source = Join-Path $castle.CastlePath $Path
         New-Item -ItemType Directory -Path (Split-Path -Parent $source) -Force | Out-Null
@@ -145,6 +151,36 @@ Describe 'Review validation, diagnostics, and help' {
         $validation.Errors | Should -BeNullOrEmpty
     }
 
+    It 'warns about an always-shadowed entry with the correct identifier in either order' -ForEach @(
+        @{ Reverse = $false; ShadowedEntry = 'roots[1]' }
+        @{ Reverse = $true; ShadowedEntry = 'roots[0]' }
+    ) {
+        # Reusing one source is legal, but an unconditional higher priority can
+        # make its conditional declaration unreachable regardless of file contents.
+        $roots = @(
+            @{ source = 'overlay'; target = 'home'; priority = 1000 }
+            @{ source = 'overlay'; target = 'home'; priority = 1; when = @{ os = 'linux' } }
+        )
+        if ($Reverse) { [array]::Reverse($roots) }
+        Set-ReviewManifest $roots
+        Add-ReviewFile 'overlay/example'
+        $plan = Get-HomepsickLinkPlan -CastleName configs -MachineFacts @{ os = 'linux' }
+        $plan.IsValid | Should -BeTrue
+        ($plan.Warnings | Where-Object Code -eq ShadowedEntry).Entries | Should -Be $ShadowedEntry
+        $plan.Shadowed.Entry | Should -Be $ShadowedEntry
+        $plan.Winners.Priority | Should -Be 1000
+    }
+
+    It 'exposes internal result type metadata without requiring public type accelerators' {
+        Set-ReviewManifest @()
+        $plan = Get-HomepsickLinkPlan -CastleName configs
+        $validation = Test-HomepsickManifest -CastleName configs
+        (Get-Command Get-HomepsickLinkPlan).OutputType.Name | Should -Contain $plan.GetType().Name
+        (Get-Command Test-HomepsickManifest).OutputType.Name | Should -Contain $validation.GetType().Name
+        $plan.Errors.GetType().GetElementType().Name | Should -Be 'HomepsickDiagnostic'
+        $plan.Entries.GetType().GetElementType().Name | Should -Be 'HomepsickRootSelection'
+    }
+
     It 'retains potential-overlap warnings in preview without repeating them while linking' {
         Add-ReviewFile 'release/example'
         Add-ReviewFile 'edition/example'
@@ -191,6 +227,13 @@ Describe 'Review validation, diagnostics, and help' {
         @{ Command = 'Test-HomepsickManifest'; Parameters = @('CastleName', 'RepositoryPath', 'MachineFacts') }
         @{ Command = 'Get-HomepsickLinkPlan'; Parameters = @('CastleName', 'RepositoryPath', 'MachineFacts', 'AllowOutsideHome') }
         @{ Command = 'Add-HomepsickFile'; Parameters = @('CastleName', 'Path', 'Root', 'AllowOutsideHome', 'MachineFacts') }
+        @{ Command = 'Enable-HomepsickCastle'; Parameters = @('CastleName', 'All', 'Force', 'Skip', 'Batch', 'AllowOutsideHome', 'MachineFacts') }
+        @{ Command = 'New-HomepsickCastle'; Parameters = @('Clone', 'GitUrl', 'CastleName', 'Link', 'Batch', 'AllowOutsideHome') }
+        @{ Command = 'Invoke-HomepsickCastleRefresh'; Parameters = @('CastleName', 'All', 'Days', 'Pull', 'Batch', 'Link', 'AllowOutsideHome') }
+        @{ Command = 'Update-HomepsickCastle'; Parameters = @('CastleName', 'All', 'Link', 'Batch', 'AllowOutsideHome') }
+        @{ Command = 'Get-HomepsickCastle'; Parameters = @('CastleName') }
+        @{ Command = 'Enter-HomepsickCastle'; Parameters = @('CastleName') }
+        @{ Command = 'Get-HomepsickCastleStatus'; Parameters = @('CastleName', 'All') }
     ) {
         $help = Get-Help $Command -Full
         @($help.examples.example).Count | Should -BeGreaterThan 0

@@ -1,5 +1,22 @@
 function Update-HomepsickCastle {
-    <# .SYNOPSIS Pulls castle updates and initializes nested submodules. #>
+    <#
+    .SYNOPSIS
+    Pulls castle updates and initializes nested submodules.
+    .PARAMETER CastleName
+    Name of one installed castle to update.
+    .PARAMETER All
+    Updates every installed castle. This is the default when CastleName is omitted.
+    .PARAMETER Link
+    Links applicable changed content without an initial link prompt.
+    Existing destination conflicts still follow the ordinary linking policy.
+    .PARAMETER Batch
+    Suppresses the initial link prompt and skips existing destination conflicts.
+    .PARAMETER AllowOutsideHome
+    Forwards authorization for explicitly declared external destinations to linking.
+    .EXAMPLE
+    Update-HomepsickCastle -CastleName dotfiles -Link -Batch
+    Pulls a castle and links applicable changes while skipping existing conflicts.
+    #>
     [CmdletBinding(DefaultParameterSetName = 'All', SupportsShouldProcess)]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Single')][string]$CastleName,
