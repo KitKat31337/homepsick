@@ -13,9 +13,13 @@ function Resolve-HomepsickDestination {
         if ($value -notmatch '^(?:[A-Za-z]:[\\/]|/)') {
             throw "Destination environment variable '$($destination.EnvironmentVariable)' must contain an absolute path."
         }
-        # Accept one trailing directory separator without hiding repeated/UNC
-        # separators from component validation when joining the suffix.
-        if ($value.EndsWith('/') -or $value.EndsWith('\')) { $value = $value.Substring(0, $value.Length - 1) }
+        # Accept one trailing separator without hiding repeated/UNC separators.
+        # Backslashes are separators only in drive-absolute Windows values;
+        # POSIX backslashes must reach component validation unchanged.
+        $windowsValue = $value -match '^[A-Za-z]:[\\/]'
+        if ($value.EndsWith('/') -or ($windowsValue -and $value.EndsWith('\'))) {
+            $value = $value.Substring(0, $value.Length - 1)
+        }
         $expanded = $value + $destination.EnvironmentSuffix
         $destination = ConvertTo-HomepsickDestination -Path $expanded -Literal
     }

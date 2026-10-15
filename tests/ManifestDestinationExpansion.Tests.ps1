@@ -175,6 +175,21 @@ Describe 'Destination navigation and environment expansion' {
         (Get-HomepsickLinkPlan -CastleName configs).Errors.Code | Should -Contain 'InvalidDestination'
     }
 
+    It 'rejects a POSIX environment value ending in a backslash with suffix <Suffix>' -ForEach @(
+        @{ Suffix = '' }
+        @{ Suffix = '/editor' }
+    ) {
+        [Environment]::SetEnvironmentVariable('HOMEPSICK_DESTINATION_TEST', '/home/alice/config\', 'Process')
+        Set-ExpansionManifest ('%HOMEPSICK_DESTINATION_TEST%' + $Suffix) -OutsideHome $true
+        $plan = Get-HomepsickLinkPlan -CastleName configs
+        $plan.IsValid | Should -BeFalse
+        $plan.Errors.Code | Should -Contain 'InvalidDestination'
+        $plan.Errors.Message -join ' ' | Should -BeLike '*invalid path component*'
+        $plan.Winners | Should -BeNullOrEmpty
+        { Enable-HomepsickCastle -CastleName configs -AllowOutsideHome -Force -Batch } | Should -Throw '*invalid path component*'
+        Get-Content -LiteralPath (Join-Path $castle.CastlePath 'shared/settings') | Should -Be 'shared settings'
+    }
+
     It 'infers Windows eligibility without priority points from <Path>' -ForEach @(
         @{ Path = '%APPDATA%/../Local/Editor' }
         @{ Path = '$APPDATA/../Local/Editor' }
@@ -194,8 +209,13 @@ Describe 'Destination navigation and environment expansion' {
         (Test-HomepsickManifest -CastleName configs).Errors.Code | Should -Contain 'UnreachableEntry'
     }
 
-    It 'resolves redirected Windows AppData using injected Windows facts on either host' {
-        [Environment]::SetEnvironmentVariable('APPDATA', 'd:\Redirected Profiles\alice\Roaming', 'Process')
+    It 'resolves redirected Windows AppData on either host with trailing separator = <Trailing>' -ForEach @(
+        @{ Trailing = $false }
+        @{ Trailing = $true }
+    ) {
+        $value = 'd:\Redirected Profiles\alice\Roaming'
+        if ($Trailing) { $value += '\' }
+        [Environment]::SetEnvironmentVariable('APPDATA', $value, 'Process')
         Set-ExpansionManifest '%APPDATA%\..\Local\Editor' -OutsideHome $true
         $plan = Get-HomepsickLinkPlan -CastleName configs -MachineFacts @{ os = 'windows' }
         $plan.Entries.Selected | Should -BeTrue
