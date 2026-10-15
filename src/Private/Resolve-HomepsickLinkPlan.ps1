@@ -50,7 +50,11 @@ function Resolve-HomepsickLinkPlan {
                 }
             }
         }
-        foreach ($entry in $entries) {
+        $environmentDestinations = @{}
+        # Resolve active entries first so inactive roots sharing an active named
+        # target can still prove ownership without looking up inactive variables.
+        $orderedEntries = @($entries | Where-Object Selected) + @($entries | Where-Object { -not $_.Selected })
+        foreach ($entry in $orderedEntries) {
             # Record current mappings for inactive roots too. Existing-link ownership
             # is inferred from today's declarations and target, without stored history.
             try {
@@ -58,7 +62,15 @@ function Resolve-HomepsickLinkPlan {
                     $homePath
                 }
                 else {
-                    Resolve-HomepsickDestination -Path $manifest.Destinations[$entry.Target].Path -HomePath $homePath
+                    $declaration = $manifest.Destinations[$entry.Target]
+                    if ($declaration.EnvironmentVariable) {
+                        if (-not $environmentDestinations.ContainsKey($entry.Target)) {
+                            if (-not $entry.Selected) { continue }
+                            $environmentDestinations[$entry.Target] = Resolve-HomepsickDestination -Path $declaration.Path -HomePath $homePath
+                        }
+                        $environmentDestinations[$entry.Target]
+                    }
+                    else { Resolve-HomepsickDestination -Path $declaration.Path -HomePath $homePath }
                 }
                 if ($entry.Into) {
                     $destinationBase = [IO.Path]::GetFullPath([IO.Path]::Combine($destinationBase, $entry.Into))

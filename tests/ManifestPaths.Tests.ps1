@@ -62,9 +62,9 @@ Describe 'Portable manifest destination declarations' {
         @{ Label = 'current-drive-relative path'; Literal = '\Editor\settings' }
         @{ Label = 'drive root'; Literal = 'C:/' }
         @{ Label = 'backslash drive root'; Literal = 'D:\' }
-        @{ Label = 'Windows traversal'; Literal = 'C:/config/../escape' }
-        @{ Label = 'backslash Windows traversal'; Literal = 'C:\config\..\escape' }
-        @{ Label = 'POSIX traversal'; Literal = '/var/config/../escape' }
+        @{ Label = 'Windows anchor escape'; Literal = 'C:/config/../../escape' }
+        @{ Label = 'backslash Windows anchor escape'; Literal = 'C:\config\..\..\escape' }
+        @{ Label = 'POSIX anchor escape'; Literal = '/var/config/../../../escape' }
         @{ Label = 'empty Windows path component'; Literal = 'C:/config//settings' }
         @{ Label = 'reserved Windows device'; Literal = 'C:/config/CON' }
         @{ Label = 'trailing Windows dot'; Literal = 'C:/config./settings' }

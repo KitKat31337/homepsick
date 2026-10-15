@@ -66,14 +66,16 @@ The top-level object requires integer `version: 1` and a `roots` array. `destina
 | `into` | Optional directory below the target. `editor_settings/settings.json` with `into: ".config/editor"` links to `$HOME/.config/editor/settings.json`. |
 | `when` | Object containing the supported condition fields below. |
 | `priority` | Optional signed 32-bit JSON integer replacing the entire default score. Negative values are permitted. |
-| Destination `path` | Literal `~/relative/path`, POSIX `/absolute/path`, or Windows drive-absolute subdirectory using either `C:/absolute/path` or `C:\absolute\path`. |
+| Destination `path` | `~/relative/path`, POSIX `/absolute/path`, Windows drive-absolute subdirectory using either slash style, or one leading environment variable with an optional directory suffix. |
 | Destination `outsideHome` | Boolean explicitly authorizing an outside-home destination declaration; runtime authorization is also required. |
 
-Use forward slashes in `source`, `into`, and home-relative destinations. Windows drive-absolute destinations accept either slash style, including `C:\config`, `D:/config`, and mixed Windows separators. In JSON, escape backslashes: write `"path": "C:\\config"`. Homepsick normalizes drive-destination separators internally without rewriting the manifest. `~/` is the only substitution: it denotes the home directory Homepsick already uses (`HOME`, or the user profile when `HOME` is unset). No environment variables, PowerShell expressions, shell commands, or wildcard expansion are evaluated. Spaces are supported. Absolute paths outside the current home require `outsideHome: true`; prefer `~/` for portable locations within home.
+Use forward slashes in `source`, `into`, and home-relative destinations. Windows drive-absolute destinations accept either slash style, including `C:\config`, `D:/config`, and mixed Windows separators. In JSON, escape backslashes: write `"path": "C:\\config"`. Homepsick normalizes destination paths internally without rewriting the manifest. `~/` denotes the home directory Homepsick already uses (`HOME`, or the user profile when `HOME` is unset). Environment-variable forms are described below. No PowerShell expressions, shell commands, or wildcard expansion are evaluated. Spaces are supported. Paths outside the current home require `outsideHome: true`; prefer `~/` for portable locations within home.
 
 A drive-absolute destination makes each root targeting it Windows-only even without `when.os`. Linux skips these entries without needing the drive, destination directory, or source directory to exist; a missing source can still produce a warning. Explicit conditions contradicting the inferred requirement, such as `os: linux` or `distro: ubuntu`, produce `UnreachableEntry` with the root identifier. The inferred platform requirement adds no priority points. POSIX absolute destinations only resolve on Unix; condition their roots explicitly when sharing a manifest with Windows. A foreign-platform absolute declaration still requires `outsideHome: true`.
 
-Source and `into` paths must be relative; destination paths must use one of the three forms above. Paths cannot contain traversal (`.` or `..`), empty components, `.git`, control characters, wildcards, Windows-invalid punctuation, trailing dots/spaces, or reserved Windows device names. Backslashes remain invalid in `source`, `into`, home-relative/POSIX destinations, and tracked relative filenames; accepting Windows destination separators does not relax these rules. Drive-relative paths (`C:config`), UNC and device paths, and filesystem/drive roots (`/`, `C:/`, `D:\`) are rejected. Ordinary castles without manifests retain their existing filename rules.
+Source and `into` paths must be relative and cannot contain `.` or `..`; tracked relative filenames retain that restriction too. Destination `path` values allow lexical `.` and `..` navigation: `~/AppData/Roaming/../Local/Editor` becomes `~/AppData/Local/Editor`, and `/etc/example/../other` becomes `/etc/other`. Navigation cannot move above the `~/` home anchor or a filesystem/drive root. Destinations resolving to a bare anchor, such as `D:/config/..`, are rejected. Normalization does not follow symlinks; existing safety checks apply to the resulting path before any writes.
+
+All ordinary path components are validated before cancellation: `C:/config/.git/../settings` remains invalid. Empty components, `.git`, control characters, wildcards, Windows-invalid punctuation, trailing dots/spaces, and reserved Windows device names are forbidden. Backslashes remain invalid in `source`, `into`, home-relative/POSIX destinations, and tracked relative filenames. Drive-relative paths (`C:config`), UNC and device paths, and filesystem/drive roots (`/`, `C:/`, `D:\`) are rejected. Ordinary castles without manifests retain their existing filename rules.
 
 A manifest can contain both Windows and POSIX destinations even when those paths, drives, or inactive source directories are absent. For example:
 
@@ -91,7 +93,39 @@ A manifest can contain both Windows and POSIX destinations even when those paths
 }
 ```
 
-On Linux, the Windows destination is implicitly inactive and does not prevent validation or linking Linux files. On Windows, the Linux entry's condition keeps it inactive. A missing native destination is valid and is created during linking only with the required outside-home opt-in. Synthetic `-MachineFacts` changes condition selection, not the executing filesystem's path rules: selecting Windows facts on Linux can select a drive destination for inspection, but the plan then reports `InvalidDestination` and linking stops before modifying files. Inactive declarations still undergo schema validation, including the restrictions on traversal, UNC/device paths, and drive roots.
+On Linux, the Windows destination is implicitly inactive and does not prevent validation or linking Linux files. On Windows, the Linux entry's condition keeps it inactive. A missing native destination is valid and is created during linking only with the required outside-home opt-in. Synthetic `-MachineFacts` changes condition selection, not the executing filesystem's path rules: selecting Windows facts on Linux can select a drive destination for inspection, but the plan then reports `InvalidDestination` and linking stops before modifying files. Inactive declarations still undergo syntax validation, including the restrictions on anchor escapes, UNC/device paths, and drive roots.
+
+### Environment variables in destination paths
+
+A destination may start with one process-environment variable, using any of these forms on either platform:
+
+| Form | Example |
+| --- | --- |
+| `%NAME%` | `%APPDATA%/../Local/Editor` |
+| `$NAME` | `$XDG_CONFIG_HOME/editor` |
+| `${NAME}` | `${HOME}/.config/editor` |
+
+The variable may stand alone or have a directory suffix. `$NAME` and `${NAME}` use shell identifier names (`[A-Za-z_][A-Za-z0-9_]*`); `%NAME%` additionally supports names such as `%ProgramFiles(x86)%`. Names are looked up directly, with Windows case-insensitive and Unix case-sensitive environment behavior. `%HOME%` and `$HOME` read the actual environment variable; only `~/` uses Homepsick's home-directory fallback. These forms do not enable Bash or PowerShell evaluation. `$env:NAME`, defaults such as `${NAME:-fallback}`, multiple variable substitutions, and command substitution are unsupported. Values are literal data and are not expanded recursively.
+
+```json
+{
+  "version": 1,
+  "destinations": {
+    "localEditor": { "path": "%APPDATA%/../Local/Editor", "outsideHome": true },
+    "xdgEditor": { "path": "${XDG_CONFIG_HOME}/editor", "outsideHome": true }
+  },
+  "roots": [
+    { "source": "editor_settings", "target": "localEditor" },
+    { "source": "editor_settings", "target": "xdgEditor", "when": { "os": "linux" } }
+  ]
+}
+```
+
+`APPDATA`, `LOCALAPPDATA`, and `USERPROFILE` imply Windows eligibility in all three forms, without adding priority points. Other variable names do not imply an OS: use explicit conditions when a variable is available only on particular machines. A missing `XDG_CONFIG_HOME` does not fall back to `~/.config`; use `~/.config/editor` when that is the desired fixed location.
+
+Unused destinations and skipped entries do not require their variables to exist. Static validation checks syntax without reading values; it retains conservative overlap warnings for environment destinations. Selected targets expand their variable and then normalize `.` and `..`. A missing/empty variable, relative value, foreign-platform value, or invalid final path produces `InvalidDestination` with the affected root identifier before linking. Environment values must be absolute paths. Windows values accept either separator style, including backslashes in the suffix; POSIX values and their suffixes require forward slashes.
+
+The expanded, normalized path determines containment and conflicts. A result outside home requires both `outsideHome: true` and runtime `-AllowOutsideHome`; neither the variable nor `..` bypasses authorization. Symbolic-link parents, repository/storage destinations, filesystem roots, and other existing safeguards remain enforced. Preview, linking, and tracking use the same expansion and resolution.
 
 ## Conditions and detection
 
@@ -207,7 +241,7 @@ Enable-HomepsickCastle -CastleName dotfiles -AllowOutsideHome -Batch
 
 Preview and linking share the same root selection and file resolution. A selected outside-home file is reported with `OutsideHome: true` and `Allowed: false` unless `-AllowOutsideHome` is supplied. Linking skips it with a warning without runtime opt in. `-AllowOutsideHome` is also forwarded by clone, pull, and refresh. It grants no operating-system permissions; use an appropriately permitted account for locations such as `/etc/example`.
 
-Existing symbolic links can be updated when a different root wins and their current target satisfies a currently declared source-to-destination mapping, including an entry inactive on this machine. Homepsick infers managed ownership from that current relationship; it stores no ownership history. A manually created link satisfying the same check is indistinguishable from one Homepsick created. A removed overlay file can therefore fall back to another tracked file. Links merely pointing somewhere in the repository without the matching destination relationship are conflicts. Without a replacement winner, stale links are retained; broader cleanup is tracked in [#20](https://github.com/KitKat31337/homepsick/issues/20).
+Existing symbolic links can be updated when a different root wins and their current target satisfies a currently declared source-to-destination mapping, including an entry inactive on this machine. An inactive environment-based mapping is available for this check only when an active entry resolves the same named destination; otherwise its variable stays unread and ownership cannot be established from that mapping. Homepsick infers managed ownership from that current relationship; it stores no ownership history. A manually created link satisfying the same check is indistinguishable from one Homepsick created. A removed overlay file can therefore fall back to another tracked file. Links merely pointing somewhere in the repository without the matching destination relationship are conflicts. Without a replacement winner, stale links are retained; broader cleanup is tracked in [#20](https://github.com/KitKat31337/homepsick/issues/20).
 
 After outside-home opt in, conflicts follow the same policy inside and outside home. Verified managed links can be updated when the winner changes. Other individual files or symbolic links require confirmation or deliberate `-Force`; `-Batch` skips them unless combined with `-Force`, and `-Skip` always leaves them untouched. `-WhatIf` previews replacements without writing. Directory trees are never replaced, even with `-Force`, and are reported as conflicts for review. Removing a directory symbolic link leaves its target directory intact. Manifest source directories and destination parents cannot be symbolic links or reparse points; tracked symbolic source files must resolve to existing files inside the castle. Destinations within the source repository or Homepsick's storage are rejected. Parent paths and managed-link ownership are checked again during linking.
 

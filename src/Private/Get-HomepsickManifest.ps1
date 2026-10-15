@@ -41,7 +41,8 @@ function Get-HomepsickManifest {
             & $addIssue Error UnsupportedVersion @() 'Manifest version must be the integer 1.'
         }
         if ($data.roots -isnot [array]) { & $addIssue Error InvalidRoots @() 'roots must be an array.' }
-        # Destination declarations stay literal; external writes need a separate opt-in.
+        # Validate declarations without reading environment variables. Active targets
+        # are expanded by the shared plan before checking external authorization.
         if ($data.Contains('destinations') -and $data.destinations -isnot [System.Collections.IDictionary]) {
             & $addIssue Error InvalidDestinations @() 'destinations must be an object.'
         }
@@ -60,25 +61,18 @@ function Get-HomepsickManifest {
                 foreach ($key in $destination.Keys) {
                     if ($key -cnotin @('path', 'outsideHome')) { & $addIssue Error UnknownProperty @() "Unknown property '$key' in destination '$name'." }
                 }
-                $path = $destination.path
-                # Only drive-absolute Windows destinations accept backslashes.
-                # Normalize their separators before portable validation; UNC/device
-                # prefixes and backslashes in source/into/home-relative paths stay invalid.
-                $portablePath = if ($path -is [string] -and $path -match '^[A-Za-z]:[\\/]') {
-                    $path.Replace('\', '/')
-                } else { $path }
-                $relative = if ($portablePath -is [string]) { $portablePath -replace '^(~/|/|[A-Za-z]:/)', '' } else { $null }
-                if ($portablePath -isnot [string] -or $portablePath -notmatch '^(~/|/|[A-Za-z]:/)' -or -not (Test-HomepsickRelativePath $relative)) {
-                    & $addIssue Error InvalidDestinationPath @() "Destination '$name' requires a literal ~/path, /absolute/path, or drive-absolute Windows subdirectory without traversal."
+                try { $normalized = ConvertTo-HomepsickDestination -Path $destination.path }
+                catch {
+                    & $addIssue Error InvalidDestinationPath @() "Destination '$name': $($_.Exception.Message)"
                     continue
                 }
                 if ($destination.Contains('outsideHome') -and $destination.outsideHome -isnot [bool]) {
                     & $addIssue Error InvalidOutsideHome @() "outsideHome on '$name' must be a boolean."
                 }
-                if (-not $portablePath.StartsWith('~/') -and $destination.outsideHome -ne $true) {
+                if (-not $normalized.EnvironmentVariable -and -not $normalized.Path.StartsWith('~/') -and $destination.outsideHome -ne $true) {
                     $insideHome = $false
                     try {
-                        $resolved = Resolve-HomepsickDestination -Path $portablePath -HomePath (Get-HomePath)
+                        $resolved = Resolve-HomepsickDestination -Path $normalized.Path -HomePath (Get-HomePath)
                         $insideHome = Test-HomepsickContainedPath -Parent ([IO.Path]::GetFullPath((Get-HomePath))) -Path $resolved -AllowEqual
                     }
                     catch { $insideHome = $false }
@@ -87,7 +81,8 @@ function Get-HomepsickManifest {
                     }
                 }
                 if (@($issues | Where-Object Severity -eq Error).Count -ne $startErrors) { continue }
-                $destinations[$name] = [HomepsickDestination]@{ Path = $portablePath; OutsideHome = ($destination.outsideHome -eq $true) }
+                $normalized.OutsideHome = ($destination.outsideHome -eq $true)
+                $destinations[$name] = $normalized
             }
         }
         # Validate each raw root before converting it into the shared root contract.
@@ -144,8 +139,10 @@ function Get-HomepsickManifest {
             }
             $destinationOS = @()
             if ($entry.target -is [string] -and $destinations.ContainsKey($entry.target)) {
-                $destinationPath = $destinations[$entry.target].Path
-                if ($destinationPath -match '^[A-Za-z]:/') { $destinationOS = @('windows') }
+                $destination = $destinations[$entry.target]
+                if ($destination.Path -match '^[A-Za-z]:/' -or $destination.EnvironmentVariable -in @('APPDATA', 'LOCALAPPDATA', 'USERPROFILE')) {
+                    $destinationOS = @('windows')
+                }
             }
             if (-not @(Get-HomepsickConditionOS -When $when -DestinationOS $destinationOS).Count) {
                 & $addIssue Error UnreachableEntry $id 'Conditions and destination require incompatible operating systems.'
@@ -205,20 +202,25 @@ function Get-HomepsickManifest {
                     & $addIssue Error OverlappingSources $ids 'Source roots must not contain one another.'
                 }
                 if (-not (Test-HomepsickConditionsOverlap -Left $left -Right $right)) { continue }
-                try {
-                    $bases = foreach ($root in @($left, $right)) {
-                        $base = if ($root.Target -eq 'home') { [IO.Path]::GetFullPath((Get-HomePath)) }
-                            else { Resolve-HomepsickDestination -Path $destinations[$root.Target].Path -HomePath (Get-HomePath) }
-                        if ($root.Into) { $base = [IO.Path]::GetFullPath([IO.Path]::Combine($base, $root.Into)) }
-                        $base
+                $usesEnvironment = @($left, $right | Where-Object {
+                    $_.Target -ne 'home' -and $destinations[$_.Target].EnvironmentVariable
+                }).Count -gt 0
+                if (-not $usesEnvironment) {
+                    try {
+                        $bases = foreach ($root in @($left, $right)) {
+                            $base = if ($root.Target -eq 'home') { [IO.Path]::GetFullPath((Get-HomePath)) }
+                                else { Resolve-HomepsickDestination -Path $destinations[$root.Target].Path -HomePath (Get-HomePath) }
+                            if ($root.Into) { $base = [IO.Path]::GetFullPath([IO.Path]::Combine($base, $root.Into)) }
+                            $base
+                        }
+                        if (-not (Test-HomepsickContainedPath -Parent $bases[0] -Path $bases[1] -AllowEqual) -and
+                            -not (Test-HomepsickContainedPath -Parent $bases[1] -Path $bases[0] -AllowEqual)) { continue }
                     }
-                    if (-not (Test-HomepsickContainedPath -Parent $bases[0] -Path $bases[1] -AllowEqual) -and
-                        -not (Test-HomepsickContainedPath -Parent $bases[1] -Path $bases[0] -AllowEqual)) { continue }
-                }
-                catch {
-                    # A foreign-platform absolute destination cannot be resolved here;
-                    # retain a conservative warning rather than rejecting that manifest.
-                    $bases = $null
+                    catch {
+                        # Foreign absolute paths are unavailable here. Retain a
+                        # conservative warning, as for unexpanded environment paths.
+                        $bases = $null
+                    }
                 }
                 if ($left.Priority -eq $right.Priority) {
                     # Named destinations can alias one another; actual files are resolved by

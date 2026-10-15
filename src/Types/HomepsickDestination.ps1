@@ -1,5 +1,7 @@
-# Validated literal destination declaration; external writes still require runtime opt-in.
+# Validated destination declaration; environment values resolve only for active targets.
 class HomepsickDestination {
     [string]$Path
+    [string]$EnvironmentVariable
+    [string]$EnvironmentSuffix
     [bool]$OutsideHome
 }
