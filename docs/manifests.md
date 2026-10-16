@@ -1,5 +1,7 @@
 # Manifest roots and destinations
 
+[Documentation index](README.md#documentation) · [Configuration](configuration.md) · [Command reference](commands.md)
+
 A castle can optionally place `homepsick.json` at its repository root. Castles without this file retain the ordinary homeshick layout and command usage, including home-file tracking. Only Git-tracked files are linked, including files in initialized submodules. Untracked files are never candidates. For every castle, directory conflicts remain for review; `-Force` replaces individual files or symbolic links and never recursively deletes a directory tree.
 
 An existing `home/` directory is an implicit root targeting your home at priority 0. Declaring `source: "home"` explicitly replaces that implicit entry, so its files are processed only through the explicit declaration. Multiple explicit entries for the same source are allowed, for example to map shared settings differently on Windows and Linux. A manifest castle can omit `home/` entirely.

@@ -69,7 +69,7 @@ Enable-HomepsickCastle -CastleName $castle.CastleName -Batch -WhatIf
 Enable-HomepsickCastle -CastleName $castle.CastleName -Batch -Verbose
 ```
 
-Clone derives the castle name from the source basename and fails if the destination exists. It clones submodules recursively but does not link with `-Batch` alone. `-Link -Batch` combines cloning with creation of missing links; inspecting first is useful for an unfamiliar castle. A repository without `home/` is stored but has no dotfiles to link. [Existing local checkout placement](castles-and-linking.md#layout-and-discovery) requires no separate registration.
+Clone derives the castle name from the source basename and fails if the destination exists. It clones submodules recursively but does not link with `-Batch` alone. `-Link -Batch` combines cloning with creation of eligible missing links; inspecting first is useful for an unfamiliar castle. A repository without `home/` can still supply files through a manifest. Use `Get-HomepsickLinkPlan -CastleName $castle.CastleName` to inspect resolved destinations and conflicts, including external candidates that require opt-in. [Existing local checkout placement](castles-and-linking.md#layout-and-discovery) requires no separate registration.
 
 ## Add another managed file
 
@@ -83,6 +83,42 @@ Add-HomepsickFile -CastleName personal -Path "$HOME/.config/my tool"
 Use a path that actually exists. Quote paths containing spaces. Directory tracking processes eligible leaves, including hidden files, leaving directories in place. Ignored files and existing castle destinations are skipped. It stages accepted entries but does not commit them.
 
 Alternatively, add a new file directly under the castle's `home/` tree, stage it with Git, then run enable. An untracked source file is not linked, and an empty directory is not sufficient.
+
+## Add a manifest for shared settings
+
+An ordinary castle needs no migration. To add platform-specific placement, keep its `home/` tree and add `homepsick.json` alongside it. The following uses the existing `personal` castle, checks that both new paths are unused, and maps one shared source to Windows or Linux home locations:
+
+```powershell
+$castle = Get-HomepsickCastle -CastleName personal
+$manifestPath = Join-Path $castle.CastlePath 'homepsick.json'
+$settingsPath = Join-Path $castle.CastlePath 'editor_settings'
+if ((Get-Item -LiteralPath $manifestPath -Force -ErrorAction SilentlyContinue) -or
+    (Get-Item -LiteralPath $settingsPath -Force -ErrorAction SilentlyContinue)) {
+    throw 'Review the existing manifest or source before adapting this example.'
+}
+New-Item -ItemType Directory -Path $settingsPath | Out-Null
+Set-Content -LiteralPath (Join-Path $settingsPath 'settings.json') -Value '{}'
+@'
+{
+  "version": 1,
+  "roots": [
+    { "source": "editor_settings", "target": "home", "into": "AppData/Roaming/Editor", "when": { "os": "windows" } },
+    { "source": "editor_settings", "target": "home", "into": ".config/editor", "when": { "os": "linux" } }
+  ]
+}
+'@ | Set-Content -LiteralPath $manifestPath
+git -C $castle.CastlePath add -- homepsick.json editor_settings/settings.json
+Test-HomepsickManifest -CastleName personal | Format-List IsValid, Errors, Warnings
+$plan = Get-HomepsickLinkPlan -CastleName personal
+$plan.Entries | Format-Table Entry, Selected, Priority, Reasons -Wrap
+$plan.Winners | Format-Table SourcePath, DestinationPath, ExistingState
+Enable-HomepsickCastle -CastleName personal -Batch -WhatIf
+Enable-HomepsickCastle -CastleName personal -Batch
+```
+
+Existing `home/` stays an implicit root at priority 0. The matching editor root scores 100 for its explicit OS condition. Adding another file with `Add-HomepsickFile` may require `-Root editor_settings`: both the implicit home mapping and the editor mapping can contain its destination, and priority does not choose where to store a new file. Review and commit the staged manifest/settings using the earlier Git workflow.
+
+The [manifest guide](manifests.md) covers Windows 11 Pro, Windows Server Datacenter, Ubuntu 24.04, priority overrides, external destinations and `%NAME%`/`$NAME`/`${NAME}` expansion. Environment variables expand only for selected destinations. External writes require both `outsideHome: true` and `-AllowOutsideHome`; inspect with the read-only plan before enabling them. No scripts or configuration-file contents are evaluated.
 
 ## Review and save edits
 
@@ -115,7 +151,7 @@ Enable-HomepsickCastle -CastleName personal -Batch -Verbose
 
 Review or commit local changes before pulling; Git can reject or conflict with them. Plain `git pull` follows your configured merge/rebase policy. Existing links reveal updated content immediately. Enable handles new destinations but does not remove stale links after source renames or deletions.
 
-`Update-HomepsickCastle -Link -Batch` can combine the steps when the pull detects added or renamed paths under `home/`. It does not run linking unconditionally. Use explicit enable to repair missing links or after directly adding/staging files, changing a submodule, switching branches or restoring a checkout.
+`Update-HomepsickCastle -Link -Batch` can combine the steps after a qualifying changed-HEAD diff. Ordinary castles require added/renamed `home/` paths; manifest castles also recognize manifest changes and modifications, deletions or submodule-pointer changes in roots selected before or after pull. Skipped-root-only changes do not trigger relinking. It does not run linking unconditionally. Use explicit enable to repair missing links or after directly adding/staging files, changing machine facts/environment, switching branches or restoring a checkout. Forward `-AllowOutsideHome` when you intend to authorize declared external destinations.
 
 For an occasional age-based update:
 
@@ -136,7 +172,7 @@ foreach ($name in @('personal', 'work')) {
 Get-HomepsickCastleStatus -All
 ```
 
-The named castles must already exist. Distinct files can share ordinary destination directories. If both castles target the same path, the second command above skips the first link. There is no environment selection or priority configuration. `Enable-HomepsickCastle` with no name applies to all discovered castles, and its enumeration order is not a precedence contract. See [collisions](castles-and-linking.md#collisions-and-ordering).
+The named castles must already exist. Distinct files can share ordinary destination directories. If both castles target the same path, the second command above skips the first link. Manifest conditions and priorities apply within each castle; there is no priority setting between castles. `Enable-HomepsickCastle` with no name applies to all discovered castles, and its enumeration order is not a precedence contract. See [collisions](castles-and-linking.md#collisions-and-ordering).
 
 ## Stop managing a file or castle
 
