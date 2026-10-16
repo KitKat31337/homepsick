@@ -6,20 +6,20 @@
 
 | Platform or version | Evidence and limits |
 | --- | --- |
-| Windows | Historical project use; current CI matrix includes `windows-latest` with hosted `pwsh`. No Windows execution was performed during this documentation task. A CI definition alone does not establish that every Windows configuration passes. |
-| Linux | Current CI matrix includes `ubuntu-latest`. All nine existing Pester tests passed during this task on the Ubuntu development VM with PowerShell 7.6.6 and Git 2.56.0; additional temporary-home examples and edge cases were exercised. |
+| Windows | CI runs the full suite on `windows-latest`, including native drive paths, environment expansion, linking/tracking and both separator styles. Role/release/edition normalization uses injected CIM data; it does not assert the hosted runner's product identity. |
+| Linux | CI runs the full suite on `ubuntu-latest`, including native paths, links, distribution detection, multiple lineages and inactive Windows destinations. Local development also uses Linux with PowerShell 7.6.6. |
 | macOS | No CI job and no task-local test. The implementation uses PowerShell/.NET filesystem APIs, but that is not macOS verification. |
 | PowerShell 7.4 | Declared minimum in the manifest. CI uses the runner's installed `pwsh`, without a 7.4-specific matrix; this task did not run 7.4 itself. |
 | Windows PowerShell 5.1 | Outside the manifest's minimum version; do not use it. |
 
-See the [workflow](../.github/workflows/test.yml) and [test suite](../tests/Parity.Tests.ps1). Hosted runner versions can change. CI does not cover macOS, network shares, all Windows link privileges, arbitrary filesystem providers or every filesystem's case behavior. The runtime has no separate OS adapters or privilege-elevation mechanism.
+See the [workflow](../.github/workflows/test.yml), [test suites](../tests) and [coverage runner](../tests/Invoke-HomepsickTests.ps1). Each platform retains JaCoCo XML, missed-command CSV and summary JSON; passing test counts and command coverage are separate measurements. Windows and Linux condition contexts run on both hosts, independently of the executing OS. Hosted runner versions can change. CI does not cover macOS, all Windows link privileges, arbitrary filesystem providers or every filesystem's case behavior. UNC destinations are intentionally rejected. Homepsick does not elevate privileges automatically.
 
 ## Platform differences to plan for
 
 - **Links:** homepsick uses `New-Item -ItemType SymbolicLink`, not hard links, copies or Windows junctions as a fallback. Windows needs the relevant symbolic-link permission. Developer Mode can permit non-elevated creation on supported Windows configurations; organizational policy can still apply. See Microsoft's [New-Item documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/new-item#example-7-create-a-symbolic-link-to-a-file-or-folder). Do not make an elevated shell your routine dotfile-management environment.
-- **Case and names:** Linux filesystems commonly distinguish case; Windows and macOS volumes often do not. Use consistent, portable names and avoid case-only differences. Selection requires the exact `home/` prefix, and the already-linked comparison has a [case-sensitivity defect](castles-and-linking.md#linking-and-conflicts).
-- **Paths:** .NET constructs platform separators; there are no Windows-only destination mappings. A file intended for PowerShell's profile must occupy the correct relative path for that host. Filename legality, path length and filesystem link support remain platform constraints. Quote spaces and use literal-path inspection.
-- **Home:** `$env:HOME` takes precedence over the .NET user profile. It can differ from PowerShell's `$HOME`. Both storage and destinations move together when it is overridden; see [configuration](configuration.md).
+- **Case and names:** Linux filesystems commonly distinguish case; Windows and macOS volumes often do not. Use consistent, portable names and avoid case-only differences. Source-root prefixes are case-sensitive. Manifest link comparisons follow the executing OS; ordinary no-manifest execution retains a [case-sensitivity defect](castles-and-linking.md#linking-and-conflicts).
+- **Paths:** manifests can map the same source to different Windows and Linux destinations. Drive-absolute destinations accept `C:/config` or JSON-escaped `C:\\config` and imply Windows eligibility. POSIX paths require forward slashes. Sources, `into` and tracked relative filenames remain strict portable paths. Filename legality, path length and filesystem link support remain platform constraints. Quote spaces and use literal-path inspection.
+- **Home:** `$env:HOME` takes precedence over the .NET user profile. It can differ from PowerShell's `$HOME`. It changes storage and default home destinations; explicit absolute destinations remain explicit. See [configuration](configuration.md).
 - **Profiles:** use `$PROFILE.CurrentUserCurrentHost` or `$PROFILE.CurrentUserAllHosts` rather than fixed Windows or Unix paths. Windows PowerShell and PowerShell 7, and different hosts, can use different profiles. See [profile integration](installation.md#load-in-future-sessions) and Microsoft's [profile reference](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_profiles).
 - **Git checkout:** homepsick delegates tracked-symlink checkout, line endings, executable modes and submodule behavior to Git. In particular, inspect Git's `core.symlinks` and the resulting source entry when a Unix symlink is checked out as ordinary text on Windows. Enabling homepsick does not reconstruct that source symlink or normalize application configuration across OSes.
 
@@ -80,26 +80,56 @@ Enable-HomepsickCastle -CastleName personal -Batch -Verbose
 Enable-HomepsickCastle -CastleName personal -Force -WhatIf
 ```
 
-Inspect every relevant ancestor if necessary. Preserve existing content separately, then choose whether to keep it or replace it. Approved leaf replacement deletes conflicts with no backup; replacing a directory deletes its contents. An ancestor file must be reorganized manually. If another castle owns the path, choose which source to use; there is no priority setting.
+Inspect every relevant ancestor if necessary. Preserve existing content separately, then choose whether to keep it or replace it. Approved individual file/link replacement has no backup. Real directory conflicts remain untouched, including under force, and an ancestor file must be reorganized manually. Manifest plans reject unsafe ancestors before writes. If another castle owns the path, choose which source to use; there is no priority setting between castles.
 
 ## Files do not appear after clone, pull or enable
 
-**Likely causes:** no tracked `home/` entries, batch clone without linking, update's conditional link gate, uninitialized submodules, or skipped conflicts.
+**Likely causes:** no tracked files under an applicable root, skipped conditions, invalid plans, missing external opt-in, batch clone without linking, update's conditional link gate, uninitialized submodules, or skipped conflicts.
 
 ```powershell
 $castle = Get-HomepsickCastle -CastleName personal
-$castle.ItemsToLink() | Format-Table RelativePath, SourcePath
-git -C $castle.CastlePath ls-files -- home
+$plan = Get-HomepsickLinkPlan -CastleName personal
+$plan.Entries | Format-Table Entry, Source, Selected, Priority, Reasons -Wrap
+$plan.Winners | Format-Table SourcePath, DestinationPath, Allowed, ExistingState
+$plan.Errors | Format-Table Code, Entries, Message -Wrap
+git -C $castle.CastlePath ls-files
 git -C $castle.CastlePath status --short
 git -C $castle.CastlePath submodule status --recursive
 Enable-HomepsickCastle -CastleName personal -Batch -Verbose
 ```
 
-Stage intended files beneath literal `home/`; root files and untracked files do not map. Initialize trusted submodules with `git -C $castle.CastlePath submodule update --init --recursive` when needed. An update without a qualifying addition/rename does not run enable, even with `-Link`. Git synchronization changes source content; enable creates the destination links. Newline-containing filenames currently cannot be selected by the parser.
+Stage intended files beneath `home/` or a declared source root; untracked files do not map. Initialize trusted submodules with `git -C $castle.CastlePath submodule update --init --recursive` when needed. Update must change `HEAD` and satisfy its link gate: ordinary `home/` additions/renames, or manifest/selected-root changes. Machine-fact or environment changes alone require an explicit enable. Git synchronization changes source content; enable creates the destination links. Newline-containing filenames currently cannot be selected by the parser.
+
+## Manifest diagnostics and destination variables
+
+Inspect structured diagnostics before modifying links:
+
+```powershell
+$validation = Test-HomepsickManifest -CastleName personal
+$validation.Errors | Format-Table Code, Entries, Message -Wrap
+$validation.Warnings | Format-Table Code, Entries, Message -Wrap
+$plan = Get-HomepsickLinkPlan -CastleName personal
+$plan.MachineFacts
+$plan.FactNotes
+$plan.Entries | Format-Table Entry, Selected, CalculatedPriority, Priority, Reasons -Wrap
+```
+
+| Diagnostic or state | What to inspect |
+| --- | --- |
+| `InvalidDestination` | A selected variable may be missing/empty, relative, invalid, or an absolute path for another OS. Values must be absolute; a POSIX value ending in a backslash is rejected rather than trimmed. |
+| `UnreachableEntry` | Conditions contradict each other or the destination's inferred Windows requirement. Drive paths and `APPDATA`/`LOCALAPPDATA`/`USERPROFILE` cannot be combined with Linux-only conditions. |
+| `OutsideHomeDeclaration` / `Allowed = false` | Declare `outsideHome: true` for external mappings, then supply `-AllowOutsideHome` for actual writes. Preview with that switch still changes nothing. |
+| `PriorityTie` / `PotentialTie` | Actual equal highest-priority file candidates fail; potential static overlap warns. Refine conditions or set explicit priorities, then inspect winners again. Manifest order never resolves a tie. |
+| `AmbiguousTrackingRoot` | Multiple storage mappings qualify for add; choose a source or `roots[n]` with `-Root`. Priority chooses link winners, not storage. |
+| `UnsafeSourceLink` / `UnsafeDestination` | Source links must resolve to existing files inside the castle; destination parents must not redirect writes through symlinks/reparse points or blocking files. |
+
+`%NAME%`, `$NAME` and `${NAME}` read the process environment as data. Windows lookups are case-insensitive; Linux lookups are case-sensitive. There is no shell default such as `${NAME:-fallback}` and no recursive expansion. Skipped and unused destinations need no variable values. A generic custom variable does not imply an OS; condition its root when appropriate. See [destination expansion](manifests.md#environment-variables-in-destination-paths).
+
+`-MachineFacts` replaces facts completely, not just specified fields. It does not emulate a foreign filesystem or change the process environment. Unknown Windows releases/editions remain unavailable, with raw detection values and reasons in `FactNotes`; matching entries that require them are skipped without invalidating the manifest. Recheck actual detected facts when a synthetic preview differs from execution.
 
 ## A link is broken or points to unexpected content
 
-**Likely causes:** a moved/deleted source, a deleted or archived castle, an absent submodule, a wrong castle selected in a collision, a machine-specific source symlink, or the case-only target-comparison defect.
+**Likely causes:** a moved/deleted source, a deleted or archived castle, an absent submodule, a wrong castle selected in a collision, changed manifest conditions/mappings, a machine-specific source symlink, or the legacy case-only target-comparison defect.
 
 ```powershell
 $path = Join-Path $HOME '.example'
@@ -109,7 +139,7 @@ git -C $castle.CastlePath status --short
 $castle.ItemsToLink() | Format-Table RelativePath, SourcePath
 ```
 
-`Get-Item -Force` can inspect a link whose target is gone; do not use only `Test-Path` to decide whether a link entry exists. Resolve a relative target from the link's parent and inspect the target itself. Restore an unintentionally missing source from your own Git history or backups. If the source was intentionally removed, retire the stale link manually. Enabling does not clean stale links or restore missing source files. Inspect and replace a wrong link deliberately; `-Force` may still skip a case-only wrong target because of the equality defect.
+`Get-Item -Force` can inspect a link whose target is gone; do not use only `Test-Path` to decide whether a link entry exists. Resolve a relative target from the link's parent and inspect the target itself. Restore an unintentionally missing source from your own Git history or backups. If the source was intentionally removed or its mapping stopped matching without a replacement winner, retire the stale link manually. Enabling does not clean stale links or restore missing source files. Inspect and replace a wrong link deliberately; no-manifest execution may still skip a case-only wrong target because of its legacy equality behavior.
 
 ## Status says Current, Behind or Uncheckable unexpectedly
 

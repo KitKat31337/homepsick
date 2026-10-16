@@ -11,9 +11,11 @@
         'Enter-HomepsickCastle',
         'Get-HomepsickCastle',
         'Get-HomepsickCastleStatus',
+        'Get-HomepsickLinkPlan',
         'Invoke-HomepsickCastleRefresh',
         'New-HomepsickCastle',
-        'Update-HomepsickCastle'
+        'Update-HomepsickCastle',
+        'Test-HomepsickManifest'
     )
     CmdletsToExport = @()
     VariablesToExport = @()

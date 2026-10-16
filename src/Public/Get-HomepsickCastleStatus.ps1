@@ -1,5 +1,15 @@
 function Get-HomepsickCastleStatus {
-    <# .SYNOPSIS Checks a castle against its upstream without changing files. #>
+    <#
+    .SYNOPSIS
+    Checks a castle against its upstream without changing files.
+    .PARAMETER CastleName
+    Name of one installed castle to inspect.
+    .PARAMETER All
+    Checks every installed castle. This is the default when CastleName is omitted.
+    .EXAMPLE
+    Get-HomepsickCastleStatus -All
+    Reports each installed castle's relationship to its upstream repository.
+    #>
     [CmdletBinding(DefaultParameterSetName = 'All')]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Single')][string]$CastleName,

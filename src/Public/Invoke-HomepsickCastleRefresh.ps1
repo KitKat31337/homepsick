@@ -1,5 +1,26 @@
 function Invoke-HomepsickCastleRefresh {
-    <# .SYNOPSIS Pulls castles whose last fetch is older than the requested number of days. #>
+    <#
+    .SYNOPSIS
+    Offers to pull castles whose last fetch is older than the requested age.
+    .PARAMETER CastleName
+    Name of one installed castle to check.
+    .PARAMETER All
+    Checks every installed castle. This is the default when CastleName is omitted.
+    .PARAMETER Days
+    Age in days before a castle needs refreshing. Defaults to seven days.
+    .PARAMETER Pull
+    Pulls outdated castles without asking for refresh confirmation.
+    .PARAMETER Batch
+    Suppresses refresh and link prompts. Use Pull to update in batch mode.
+    .PARAMETER Link
+    Links applicable changed content after a pull without an initial link prompt.
+    Existing destination conflicts still follow the ordinary linking policy.
+    .PARAMETER AllowOutsideHome
+    Forwards authorization for explicitly declared external destinations to linking.
+    .EXAMPLE
+    Invoke-HomepsickCastleRefresh -All -Days 7 -Pull -Batch -Link
+    Refreshes outdated castles and links applicable updates without initial prompts.
+    #>
     [CmdletBinding(DefaultParameterSetName = 'All')]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Single')][string]$CastleName,
@@ -7,7 +28,8 @@ function Invoke-HomepsickCastleRefresh {
         [ValidateRange(0, 36500)][int]$Days = 7,
         [switch]$Pull,
         [switch]$Batch,
-        [switch]$Link
+        [switch]$Link,
+        [switch]$AllowOutsideHome
     )
 
     $names = if ($PSCmdlet.ParameterSetName -eq 'Single') { @($CastleName) } else { @(Get-HomepsickNames) }
@@ -20,9 +42,9 @@ function Invoke-HomepsickCastleRefresh {
             Write-Verbose "Castle '$name' is fresh."
             continue
         }
-        if ($Pull) { Update-HomepsickCastle -CastleName $name -Link:$Link -Batch:$Batch }
+        if ($Pull) { Update-HomepsickCastle -CastleName $name -Link:$Link -Batch:$Batch -AllowOutsideHome:$AllowOutsideHome }
         elseif (-not $Batch -and $PSCmdlet.ShouldContinue("Castle '$name' is outdated. Pull it?", 'Refresh castle')) {
-            Update-HomepsickCastle -CastleName $name -Link:$Link
+            Update-HomepsickCastle -CastleName $name -Link:$Link -AllowOutsideHome:$AllowOutsideHome
         }
         elseif (-not $Batch -and $fetch) {
             # Like homeshick, defer another interactive reminder after declining.

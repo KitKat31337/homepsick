@@ -21,9 +21,11 @@ Import-Module ./homepsick/src/Homepsick.psd1
 | `track CASTLE FILE` | `Add-HomepsickFile -CastleName CASTLE -Path FILE` |
 | `cd CASTLE` | `Enter-HomepsickCastle -CastleName CASTLE` |
 
-Omit `-CastleName` on link, pull, check, or refresh to process every installed castle. Clone accepts a Git URL, local path, or GitHub `owner/repo` shorthand. Clone offers to link when a `home` directory exists; pull offers when it detects added or renamed paths under `home/`. `-Batch` suppresses these homepsick prompts; combine it with `-Link` to request linking when that step is reached. Refresh checks Git's `FETCH_HEAD` timestamp and defaults to seven days; `-Pull` bypasses the refresh pull prompt.
+Omit `-CastleName` on link, pull, check, or refresh to process every installed castle. Clone accepts a Git URL, local path, or GitHub `owner/repo` shorthand. Ordinary castles offer linking after clone when `home/` exists, and after pull when added or renamed `home/` paths are detected. Manifest castles also recognize selected non-home roots and changes to their manifest or selected content. `-Batch` suppresses these homepsick prompts; combine it with `-Link` to request linking when that step is reached. Refresh checks Git's `FETCH_HEAD` timestamp and defaults to seven days; `-Pull` bypasses the refresh pull prompt.
 
-Linking acts on Git-tracked files under a castle's `home` directory, including initialized submodules. Existing paths prompt before replacement. `-Skip` skips conflicts, `-Batch` defaults to skipping them, and `-Force` replaces them. `New-HomepsickCastle`, `Add-HomepsickFile` and `Enable-HomepsickCastle` support PowerShell's `-WhatIf`; update and refresh do not. Use `-Verbose` to show routine per-file status. Windows symbolic links require an account or configuration permitted to create them, such as Developer Mode or an elevated session.
+Linking acts on Git-tracked files under `home/` or selected manifest roots, including initialized submodules. Existing files and symbolic links prompt before replacement. `-Skip` skips conflicts, `-Batch` defaults to skipping them, and `-Force` replaces individual files or symbolic links. Directory conflicts remain untouched for review, including with `-Force`. New, add, enable and update support PowerShell's `-WhatIf`; refresh does not. Use `-Verbose` to show routine per-file status. Windows symbolic links require an account or configuration permitted to create them, such as Developer Mode or an elevated session.
+
+Castles can optionally declare platform and machine overlays, shared settings mappings, and named destinations in `homepsick.json`. See the [manifest guide](docs/manifests.md) for the schema, priority rules, Windows/Linux examples, manifest-aware tracking with `Add-HomepsickFile -Root`, and external destination safeguards. Castles without a manifest keep their ordinary layout and command usage. Use `Test-HomepsickManifest` to validate a castle and `Get-HomepsickLinkPlan` to inspect selected roots, winning files, ties, and conflicts before linking.
 
 ```powershell
 New-HomepsickCastle -CastleName my-dotfiles
@@ -37,3 +39,11 @@ Run the Pester 5+ suite with:
 ```powershell
 Invoke-Pester ./tests
 ```
+
+To collect the same production command-coverage baseline as CI, use Pester 5.7.1 and run:
+
+```powershell
+./tests/Invoke-HomepsickTests.ps1 -ReportDirectory ./artifacts/coverage/local
+```
+
+CI retains separate Windows and Linux artifacts containing JaCoCo XML, missed-command CSV, and test/coverage summaries. Coverage is informational, with no percentage gate; inspect missed safety paths alongside the suite's file, link, and rollback assertions.

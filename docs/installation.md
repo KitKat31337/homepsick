@@ -50,7 +50,7 @@ Get-Command -Module Homepsick
 Get-Help New-HomepsickCastle -Full
 ```
 
-The manifest version is currently `0.2.0`. Eight functions and no aliases are exported.
+The module manifest version is currently `0.2.0`. Ten functions and no aliases are exported, including `Test-HomepsickManifest` and `Get-HomepsickLinkPlan`. The optional castle file `homepsick.json` has its own schema version, currently `1`; it is separate from the PowerShell module manifest.
 
 ## Load in future sessions
 

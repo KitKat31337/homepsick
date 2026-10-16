@@ -2,7 +2,7 @@
 
 [Documentation index](README.md#documentation) · [Everyday workflows](getting-started.md)
 
-The manifest exports exactly the eight functions below, with **no public aliases**. There is no umbrella `homepsick` command. Private helpers are implementation details. This page provides the complete descriptions and examples for every exported command. Run `Get-Command -Module Homepsick -Syntax` or `Get-Help <command> -Full` after importing the module to inspect its current metadata; built-in help is limited to the existing source synopses and generated syntax.
+The module manifest exports exactly the ten functions below, with **no public aliases**. There is no umbrella `homepsick` command. Private helpers and internal result classes are implementation details. This page describes every exported command. Run `Get-Command -Module Homepsick -Syntax` or `Get-Help <command> -Full` after importing the module for metadata, parameter help and examples.
 
 Syntax uses `[]` for optional arguments and `<...>` for values. All commands accept PowerShell common parameters such as `-Verbose` and `-ErrorAction`; only the commands explicitly showing `-WhatIf` and `-Confirm` implement `ShouldProcess`. Only `Add-HomepsickFile -Path` accepts pipeline input, by value. Castle names are scalar strings, not arrays or pipeline selections.
 
@@ -11,7 +11,9 @@ Syntax uses `[]` for optional arguments and `<...>` for values. All commands acc
 | [New-HomepsickCastle](#new-homepsickcastle) | Create or clone a castle |
 | [Get-HomepsickCastle](#get-homepsickcastle) | Discover castles and inspect their managed entries |
 | [Add-HomepsickFile](#add-homepsickfile) | Move files into a castle, link them back and stage them |
-| [Enable-HomepsickCastle](#enable-homepsickcastle) | Link tracked castle files into home |
+| [Enable-HomepsickCastle](#enable-homepsickcastle) | Link winning tracked files to selected destinations |
+| [Test-HomepsickManifest](#test-homepsickmanifest) | Validate declarations and selected file resolution without writes |
+| [Get-HomepsickLinkPlan](#get-homepsicklinkplan) | Preview facts, selected roots, winners, ties and conflicts |
 | [Get-HomepsickCastleStatus](#get-homepsickcastlestatus) | Compare local and upstream Git state |
 | [Update-HomepsickCastle](#update-homepsickcastle) | Pull changes and update submodules |
 | [Invoke-HomepsickCastleRefresh](#invoke-homepsickcastlerefresh) | Update castles according to fetch age |
@@ -27,20 +29,23 @@ Enable, status, update and refresh have two parameter sets: `-CastleName <string
 
 Missing named castles and invalid names throw. Git failures normally throw with command, repository and captured error output; some probes deliberately tolerate failures. Filesystem cmdlets can emit nonterminating errors under normal PowerShell preferences. For automation, use `-ErrorAction Stop` and inspect the resulting files and Git state after a failure. Multi-castle and multi-file operations are not transactions and can leave earlier successful changes in place.
 
+Manifest validation and planning are read only. Errors include codes and root identifiers such as `roots[2]`; linking rejects an invalid whole-castle plan before creating that castle's links. Ordinary existing destination conflicts are reported separately and use the conflict policy below. See [manifest conditions, destinations and priorities](manifests.md).
+
 ## New-HomepsickCastle
 
 Create an empty Git castle or clone a repository into the fixed castle storage location.
 
 ```text
 New-HomepsickCastle -CastleName <string> [-WhatIf] [-Confirm] [<CommonParameters>]
-New-HomepsickCastle -Clone -GitUrl <string> [-Link] [-Batch] [-WhatIf] [-Confirm] [<CommonParameters>]
+New-HomepsickCastle -Clone -GitUrl <string> [-Link] [-Batch] [-AllowOutsideHome] [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
 - **Init:** `-CastleName` is required. Creates the repository directory, runs `git init`, and creates `home/`. It does not add a remote, stage files or create an initial commit.
 - **Clone:** both `-Clone` and `-GitUrl` are required. Accepts Git-supported HTTPS/SSH URLs and local paths. A string matching `owner/repo` with an owner made of letters, digits or hyphens and a repository made of letters, digits, underscores, dots or hyphens, without a trailing `.git`, becomes `https://github.com/owner/repo.git`. Use an absolute path for local sources to avoid shorthand ambiguity and Git's `-C` relative-path context.
 - The clone name is the final component after `/`, `\` or `:`, with trailing separators and one trailing `.git` removed. There is no clone-name override; `-CastleName` cannot be combined with clone parameters. An existing destination, including a broken symbolic link, causes an error. Choose a different source basename or arrange the checkout manually rather than expecting overwrite or registration.
-- Clone runs `git clone --recursive`. A failed clone attempts to remove only its newly created destination. A repository without `home/` can be cloned and listed but contributes no links.
-- Without switches, a clone with `home/` offers to link. `-Batch` suppresses that offer. `-Link` requests linking; `-Link -Batch` creates missing links and skips conflicts. There is no forwarded `-Force`.
+- Clone runs `git clone --recursive`. A failed clone attempts to remove only its newly created destination. A repository without either `home/` or selected manifest content contributes no links.
+- Without switches, an ordinary clone with `home/` offers to link. A manifest clone builds the shared plan and offers linking when there are winning candidates, even without `home/`; an invalid plan is reported and linking rejects it. `-Batch` suppresses the initial offer. `-Link` requests linking; `-Link -Batch` creates eligible missing links and skips conflicts. There is no forwarded `-Force`.
+- Clone-only `-AllowOutsideHome` forwards authorization for destinations declared with `outsideHome: true`. Without it, external candidates remain skipped; home candidates can still link. Neither declaration nor opt-in grants filesystem permissions.
 - `-WhatIf` prevents directory creation and clone/init, but Git availability, the name and the destination are checked first. `-Confirm` controls the outer operation; it is separate from linking prompts.
 
 **Input:** no pipeline input. **Output:** one `HomepsickCastle` after successful creation, or no object when `ShouldProcess` declines. Subsequent link failures may leave the clone present.
@@ -69,7 +74,7 @@ Without a name, returns zero or more `HomepsickCastle` objects for immediate rep
 | `CastleSymRoot` | `<CastlePath>/home` |
 | `Exists()` | Whether `CastlePath` is a directory, not a repository-integrity test |
 | `GitOrigin()` | Origin URL, or an empty string when absent or the directory is missing |
-| `ItemsToLink()` | Array of objects with `RelativePath` and `SourcePath`, derived from the Git index; an empty array if the castle directory is missing |
+| `ItemsToLink()` | Git-index inventory for ordinary castles; shared-plan winners for manifest castles, with destinations/priorities; throws for an invalid manifest plan; empty if the castle directory is missing |
 | `Update()` | Pull and submodule update as described under update below; no structured output, prompts or relinking |
 
 The public type accelerator `[HomepsickCastle]` is registered on import. Its one-string constructor calculates paths but does not create or register a castle; the parameterless constructor throws. Prefer the commands for ordinary use. Object methods have no `-WhatIf` or `-Confirm` parameters.
@@ -83,19 +88,25 @@ $castle.ItemsToLink() | Format-Table RelativePath, SourcePath
 
 ## Add-HomepsickFile
 
-Move existing home-directory entries into a castle, create links back and stage them in Git. This **moves originals**; review a dry run and preserve important files first.
+Move existing destination entries into a castle, stage them in Git and link them back. This **moves originals**; review a dry run and preserve important files first.
 
 ```text
-Add-HomepsickFile [-CastleName] <string> [-Path] <string[]> [-WhatIf] [-Confirm] [<CommonParameters>]
+Add-HomepsickFile [-CastleName] <string> [-Path] <string[]> [[-Root] <string>] [[-MachineFacts] <IDictionary>] [-AllowOutsideHome] [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
-Both arguments are required. `-Path` accepts one or more filesystem paths or pipeline strings by value; there is no property-name binding or wildcard expansion. Relative paths resolve against the current PowerShell location. Each path must exist and be lexically inside the resolved home, excluding home itself. This is not a security boundary resolving parent symlinks.
+`-CastleName` and `-Path` are required. `-Path` accepts filesystem paths or pipeline strings by value; there is no property-name binding or wildcard expansion. Relative paths resolve against the current PowerShell location. Each path must exist.
+
+Without a manifest, files must be lexically inside the resolved home, excluding home itself, and are stored under `home/`. This legacy containment check does not resolve parent symlinks. With a manifest, paths must fall beneath applicable destination/`into` mappings. `-Root` selects a source directory or `roots[n]` identifier when several mappings qualify, regardless of their priority; otherwise `AmbiguousTrackingRoot` is an error. A manifest castle can omit `home/`.
+
+`-AllowOutsideHome` authorizes tracking from an external destination already declared with `outsideHome: true`. `-MachineFacts` supplies a complete synthetic selection context; omitted facts are unavailable. Destination variables and filesystem rules still use the actual process and OS.
 
 For an ordinary directory, recursively processes files and symbolic links, including hidden entries, excluding descendants whose full path contains a `.git/` component. Empty directories are not tracked; the original directory structure remains. A symbolic link is handled as an entry rather than recursively importing its target. A relative symbolic link's target is rebased when it is relocated into the castle so it still refers to the original absolute location. This can make it machine-specific.
 
 If the corresponding castle path already exists, skips it with a verbose message, even if it is not Git-tracked or the home file differs. Git-ignored paths are left untouched with a warning. There is no `-Force`, replacement prompt or overwrite option for these skips.
 
-For each accepted entry, creates castle parent directories, moves the entry, creates a relative symbolic link at the original path and runs `git add -- home/<relative-path>`. No commit or push. The code attempts to restore the current original on a terminating link/staging error; this is not a complete filesystem or index transaction, and previously processed entries remain changed. Do not rely on rollback as a backup.
+For each accepted entry, creates castle parent directories, moves the entry and stages the chosen source path. Manifest tracking rebuilds the shared plan after staging, then links the actual winner; `-Root` chooses storage and does not override file priority. Initialized submodules use their own indexes. No commit or push occurs.
+
+Manifest tracking validates source/destination parents, portable relative paths and storage boundaries before moving files. A failed entry attempts to restore its original file/link and prior index stages while preserving unrelated staged work. Previously completed entries remain changed, and filesystem failures can also prevent restoration. Rollback is per entry, not an all-input transaction or backup.
 
 **Output:** no success objects; warnings and verbose messages as applicable. `-WhatIf` still validates inputs and checks ignore rules, but does not move, link or stage. `-Confirm` applies per entry.
 
@@ -103,23 +114,30 @@ For each accepted entry, creates castle parent directories, moves the entry, cre
 Add-HomepsickFile -CastleName personal -Path "$HOME/.gitconfig" -WhatIf
 Add-HomepsickFile -CastleName personal -Path "$HOME/.gitconfig", "$HOME/.config/my tool"
 @("$HOME/.example", "$HOME/.another") | Add-HomepsickFile -CastleName personal
+Add-HomepsickFile -CastleName personal -Path "$HOME/.config/editor/settings.json" -Root editor_settings -WhatIf
 ```
+
+The final example assumes the manifest maps `editor_settings` into `.config/editor`. See [manifest tracking](manifests.md#track-files-into-roots) for ambiguous mappings, external paths and rollback examples.
 
 ## Enable-HomepsickCastle
 
-Create relative symbolic links for tracked entries under `home/`. It neither fetches nor stages anything.
+Create symbolic links for winning tracked entries under `home/` or selected manifest roots. It neither fetches nor stages anything.
 
 ```text
-Enable-HomepsickCastle [-All] [-Force] [-Skip] [-Batch] [-WhatIf] [-Confirm] [<CommonParameters>]
-Enable-HomepsickCastle -CastleName <string> [-Force] [-Skip] [-Batch] [-WhatIf] [-Confirm] [<CommonParameters>]
+Enable-HomepsickCastle [-All] [-Force] [-Skip] [-Batch] [-AllowOutsideHome] [-MachineFacts <IDictionary>] [-WhatIf] [-Confirm] [<CommonParameters>]
+Enable-HomepsickCastle -CastleName <string> [-Force] [-Skip] [-Batch] [-AllowOutsideHome] [-MachineFacts <IDictionary>] [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
-Missing `home/` trees are skipped with verbose output. Initialized submodules contribute tracked entries recursively. Ordinary parent directories are created as needed. An already-correct link is left alone. For any other existing leaf destination, including a directory or broken link:
+Without a manifest or `home/`, there are no candidates. Initialized submodules contribute tracked entries recursively. The shared plan resolves manifest conditions and within-castle priorities before any links are created. Actual highest-priority ties and file/ancestor destination overlaps are errors. Static `PotentialTie` warnings remain available in validation/preview without being repeated during unambiguous linking.
+
+`-MachineFacts` replaces detected facts completely; omitted facts stay unavailable. `-AllowOutsideHome` permits writes only to external destinations declared with `outsideHome: true`. Without opt-in those winners are skipped with a warning, including under `-Force`. Ordinary parent directories are created as needed. Already-correct links remain, and verified managed links can switch to another winner in the same manifest castle, subject to `ShouldProcess`.
+
+Real directory conflicts always remain for review, including under `-Force`. For an ordinary conflicting file or symbolic link, including another castle's link:
 
 1. `-Skip` always preserves it, even with `-Force`.
 2. `-Batch` preserves it unless `-Force` is set.
 3. Otherwise, `-Force` permits replacement without a conflict prompt; without `-Force`, asks `ShouldContinue`.
-4. Approved replacement still passes `ShouldProcess`, then uses `Remove-Item -Force -Recurse` before creating the link. **There is no backup or rollback; a directory's contents can be deleted.**
+4. Approved replacement still passes `ShouldProcess`, then removes the individual entry and creates the link. No recursive directory deletion occurs. **Individual replacements have no backup or rollback.**
 
 `-Force` does not repair a regular file blocking an ancestor directory or bypass filesystem permissions. See [collision behavior](castles-and-linking.md#collisions-and-ordering).
 
@@ -129,6 +147,65 @@ Missing `home/` trees are skipped with verbose output. Initialized submodules co
 Enable-HomepsickCastle -CastleName personal -Batch -Verbose
 Enable-HomepsickCastle -CastleName personal -Force -WhatIf
 Enable-HomepsickCastle -All -Skip
+Enable-HomepsickCastle -CastleName personal -AllowOutsideHome -Batch -WhatIf
+```
+
+## Test-HomepsickManifest
+
+Validate a castle's optional manifest, source paths and selected file resolution without modifying files.
+
+```text
+Test-HomepsickManifest -CastleName <string> [-MachineFacts <IDictionary>] [<CommonParameters>]
+Test-HomepsickManifest -RepositoryPath <string> [-MachineFacts <IDictionary>] [<CommonParameters>]
+```
+
+Exactly one of installed `-CastleName` or arbitrary `-RepositoryPath` is required. `-MachineFacts` replaces detection for condition checks and actual file ties; it does not emulate another filesystem or provide environment variables. Without a manifest the command validates the ordinary link plan and reports `HasManifest = false`.
+
+**Input:** no pipeline input. **Output:** an object with `RepositoryPath`, `HasManifest`, `IsValid`, `Errors` and `Warnings`, rather than a boolean. Each diagnostic has `Severity`, `Code`, `Entries` and `Message`. Errors make `IsValid` false; warnings alone do not. Checks include schema/version, invalid or duplicate declarations, incompatible conditions, unsafe paths, selected missing tracked files, actual priority ties and destination overlaps. Missing root directories, roots without tracked linkable files and potential overlaps can produce warnings. Existing ordinary destination conflicts are inspected with the link-plan command instead.
+
+No `-WhatIf`, `-Confirm` or external opt-in is needed for this read-only command. Missing variables matter only for selected targets. An external destination without runtime opt-in can still validate; an external selected mapping without its required declaration cannot.
+
+```powershell
+$validation = Test-HomepsickManifest -CastleName personal
+$validation | Format-List HasManifest, IsValid
+$validation.Errors | Format-Table Code, Entries, Message -Wrap
+Test-HomepsickManifest -RepositoryPath ./dotfiles -MachineFacts @{
+    os = 'linux'; distro = 'ubuntu'; distroVersion = '24.04'; distroLike = @('debian')
+}
+```
+
+The repository example assumes an existing local castle checkout. See [schema and validation](manifests.md#validate-and-preview) for complete diagnostics and canonical conditions.
+
+## Get-HomepsickLinkPlan
+
+Inspect the same selection and resolution used by enable and manifest tracking, without creating links or changing the Git index.
+
+```text
+Get-HomepsickLinkPlan -CastleName <string> [-MachineFacts <IDictionary>] [-AllowOutsideHome] [<CommonParameters>]
+Get-HomepsickLinkPlan -RepositoryPath <string> [-MachineFacts <IDictionary>] [-AllowOutsideHome] [<CommonParameters>]
+```
+
+Choose one installed castle or repository path. `-AllowOutsideHome` marks explicitly declared external winners as authorized in the preview; it never writes. `-MachineFacts` replaces detected facts, including the host, so unspecified fields cannot match. Selected environment variables and paths still resolve on the executing host. Selecting Windows facts on Linux can therefore produce an `InvalidDestination` for a drive path, even though its conditions match.
+
+| Result member | Meaning |
+| --- | --- |
+| `MachineFacts`, `FactNotes` | Normalized facts and detection/unavailability notes |
+| `Entries` | Selected and skipped roots, reasons, destination paths and calculated/overridden priorities |
+| `Candidates`, `Winners`, `Shadowed`, `Ties` | Tracked sources, resolved destination files and within-castle decisions |
+| `Conflicts` | Existing file/link/directory conflicts or blocked paths; inspect `ExistingState` and `Reason` |
+| `Errors`, `Warnings`, `IsValid` | Structured diagnostics and whole-plan validity |
+| `RepositoryPath`, `HasManifest`, `RootMappings` | Repository identity and source/destination mappings used for ownership checks |
+
+**Input:** no pipeline input. **Output:** one structured plan. There is no `-WhatIf` or `-Confirm`; the command is always read only. `IsValid` does not mean every winner is writable: inspect `Allowed` for external opt-in and `Conflicts` for existing destinations. Equal highest-priority files are errors, never resolved by manifest order. Priorities apply within a castle, not between castles.
+
+```powershell
+$plan = Get-HomepsickLinkPlan -CastleName personal
+$plan.MachineFacts
+$plan.Entries | Format-Table Entry, Source, Selected, Priority, Reasons -Wrap
+$plan.Candidates | Format-Table SourcePath, DestinationPath, Priority, Status, ExistingState, Reason -Wrap
+Get-HomepsickLinkPlan -CastleName personal -MachineFacts @{
+    os = 'windows'; windowsRelease = '11'; windowsEdition = 'pro'
+}
 ```
 
 ## Get-HomepsickCastleStatus
@@ -165,22 +242,25 @@ git -C (Get-HomepsickCastle -CastleName personal).CastlePath status --short
 Pull from the current branch's upstream, then initialize/update submodules recursively to recorded commits.
 
 ```text
-Update-HomepsickCastle [-All] [-Link] [-Batch] [<CommonParameters>]
-Update-HomepsickCastle -CastleName <string> [-Link] [-Batch] [<CommonParameters>]
+Update-HomepsickCastle [-All] [-Link] [-Batch] [-AllowOutsideHome] [-WhatIf] [-Confirm] [<CommonParameters>]
+Update-HomepsickCastle -CastleName <string> [-Link] [-Batch] [-AllowOutsideHome] [-WhatIf] [-Confirm] [<CommonParameters>]
 ```
 
 `HomepsickCastle.Update()` checks for an upstream. With none, skips both pull and submodule update and writes a verbose message. Otherwise runs plain `git pull` followed by `git submodule update --init --recursive`; it does not push, commit, stash, reset, choose a merge strategy or pull each submodule's branch tip independently. Git's policy, credentials and conflict behavior apply. A successful pull followed by a failed submodule update is a partial update, not a rollback.
 
-The command records `HEAD` before and after. Only if both are present, differ, and `git diff --name-only --diff-filter=AR <before> <after> -- home` reports added or renamed paths does it offer linking or honor `-Link`. Renames depend on Git's diff detection. `-Link` then invokes linking for the entire castle, not just new paths. `-Batch` suppresses the offer; `-Link -Batch` links with conflict skipping. Neither `-Force` nor `-Skip` is forwarded or accepted.
+The command records `HEAD` before and after. With no manifest before or after pull, linking remains gated on added/renamed `home/` paths across a changed `HEAD`. If either revision uses a manifest, it compares all changed paths against `homepsick.json` and the source roots selected before or after pull. Modifications, deletions and submodule-pointer changes in those roots qualify; skipped-root-only changes do not. Adding or removing the manifest qualifies too.
+
+`-Link` then invokes linking for the entire castle, not just changed paths. `-Batch` suppresses the initial offer; `-Link -Batch` links with conflict skipping. `-AllowOutsideHome` forwards authorization for declared external destinations. Neither `-Force` nor `-Skip` is forwarded or accepted, and this command has no `-MachineFacts` parameter.
 
 Content changes follow existing links immediately. Deletions and renames can leave stale links; updated submodules and an unchanged `HEAD` may require explicit enable. Even `-Link` does not repair missing links when its diff gate is not satisfied.
 
-**Input:** no pipeline input. **Output:** no success objects; Git output is captured rather than streamed. There is **no `-WhatIf` or `-Confirm`**. Review `git status` first and run enable separately for a predictable relink.
+**Input:** no pipeline input. **Output:** no success objects; Git output is captured rather than streamed. `-WhatIf` prevents pulling, submodule changes and linking. `-Confirm` applies to each castle's update; interactive linking decisions remain separate. Review `git status` first and run enable separately for a predictable relink.
 
 ```powershell
 Update-HomepsickCastle -CastleName personal -Batch
 Enable-HomepsickCastle -CastleName personal -Batch
 Update-HomepsickCastle -All -Link -Batch
+Update-HomepsickCastle -CastleName personal -Link -AllowOutsideHome -Batch -WhatIf
 ```
 
 ## Invoke-HomepsickCastleRefresh
@@ -188,14 +268,14 @@ Update-HomepsickCastle -All -Link -Batch
 Conditionally pull castles based on the last fetch timestamp, rather than checking live remote state.
 
 ```text
-Invoke-HomepsickCastleRefresh [-All] [-Days <int>] [-Pull] [-Batch] [-Link] [<CommonParameters>]
-Invoke-HomepsickCastleRefresh -CastleName <string> [-Days <int>] [-Pull] [-Batch] [-Link] [<CommonParameters>]
+Invoke-HomepsickCastleRefresh [-All] [-Days <int>] [-Pull] [-Batch] [-Link] [-AllowOutsideHome] [<CommonParameters>]
+Invoke-HomepsickCastleRefresh -CastleName <string> [-Days <int>] [-Pull] [-Batch] [-Link] [-AllowOutsideHome] [<CommonParameters>]
 ```
 
 `-Days` defaults to **7**, accepts integers 0–36500 inclusive, and measures elapsed UTC time. Resolves `FETCH_HEAD` with `git rev-parse --git-path FETCH_HEAD`. If that file exists and its `LastWriteTimeUtc` is **strictly newer** than `UtcNow.AddDays(-Days)`, skips the castle as fresh. Equality or absence makes it stale. `-Days 0` normally treats any past fetch as stale, but a future-dated marker is still fresh.
 
-- A stale castle with `-Pull` calls update immediately, forwarding `-Link` and `-Batch`.
-- Without `-Pull`, an interactive stale castle prompts to pull. Accepting calls update, forwarding `-Link`.
+- A stale castle with `-Pull` calls update immediately, forwarding `-Link`, `-Batch` and `-AllowOutsideHome`.
+- Without `-Pull`, an interactive stale castle prompts to pull. Accepting calls update, forwarding `-Link` and `-AllowOutsideHome`.
 - Declining the prompt touches an existing `FETCH_HEAD` timestamp to now, deferring another reminder. If the marker is absent, none is created.
 - `-Batch` without `-Pull` silently leaves stale castles alone, without touching the marker. `-Link` alone does not request a pull.
 

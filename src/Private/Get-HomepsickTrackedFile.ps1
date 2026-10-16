@@ -1,8 +1,14 @@
 function Get-HomepsickTrackedFile {
+    # Enumerates Git-tracked files, recursively through initialized submodules.
+    # Returns HomepsickTrackedFile (home-relative) for legacy callers; AllRoots
+    # returns HomepsickRepositoryFile with the full repository-relative path.
+    # Index stages remain visible here; the planner deduplicates source candidates.
     [CmdletBinding()]
+    [OutputType([HomepsickTrackedFile], [HomepsickRepositoryFile])]
     param(
         [Parameter(Mandatory)][string]$RepositoryPath,
-        [string]$Prefix = ''
+        [string]$Prefix = '',
+        [switch]$AllRoots
     )
 
     # --stage distinguishes Git submodules (mode 160000) from ordinary files.
@@ -15,12 +21,18 @@ function Get-HomepsickTrackedFile {
         if ($Matches.mode -eq '160000') {
             $submodule = Join-Path $RepositoryPath $Matches.path
             if (Test-Path -LiteralPath $submodule -PathType Container) {
-                Get-HomepsickTrackedFile -RepositoryPath $submodule -Prefix ($Prefix + $Matches.path + '/')
+                Get-HomepsickTrackedFile -RepositoryPath $submodule -Prefix ($Prefix + $Matches.path + '/') -AllRoots:$AllRoots
             }
         }
-        elseif ($relative.StartsWith(('home' + [IO.Path]::DirectorySeparatorChar), [StringComparison]::Ordinal)) {
-            $path = $relative.Substring(5)
-            [pscustomobject]@{ RelativePath = $path; SourcePath = (Join-Path $RepositoryPath $Matches.path) }
+        elseif ($AllRoots -or $relative.StartsWith(('home' + [IO.Path]::DirectorySeparatorChar), [StringComparison]::Ordinal)) {
+            $path = if ($AllRoots) { $relative } else { $relative.Substring(5) }
+            if ($AllRoots) {
+                [HomepsickRepositoryFile]@{
+                    RelativePath = $path; SourcePath = (Join-Path $RepositoryPath $Matches.path)
+                    RepositoryRelativePath = ($Prefix + $Matches.path)
+                }
+            }
+            else { [HomepsickTrackedFile]@{ RelativePath = $path; SourcePath = (Join-Path $RepositoryPath $Matches.path) } }
         }
     }
 }

@@ -1,26 +1,59 @@
 function Update-HomepsickCastle {
-    <# .SYNOPSIS Pulls castle updates and initializes nested submodules. #>
-    [CmdletBinding(DefaultParameterSetName = 'All')]
+    <#
+    .SYNOPSIS
+    Pulls castle updates and initializes nested submodules.
+    .PARAMETER CastleName
+    Name of one installed castle to update.
+    .PARAMETER All
+    Updates every installed castle. This is the default when CastleName is omitted.
+    .PARAMETER Link
+    Links applicable changed content without an initial link prompt.
+    Existing destination conflicts still follow the ordinary linking policy.
+    .PARAMETER Batch
+    Suppresses the initial link prompt and skips existing destination conflicts.
+    .PARAMETER AllowOutsideHome
+    Forwards authorization for explicitly declared external destinations to linking.
+    .EXAMPLE
+    Update-HomepsickCastle -CastleName dotfiles -Link -Batch
+    Pulls a castle and links applicable changes while skipping existing conflicts.
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'All', SupportsShouldProcess)]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Single')][string]$CastleName,
         [Parameter(ParameterSetName = 'All')][switch]$All,
         [switch]$Link,
-        [switch]$Batch
+        [switch]$Batch,
+        [switch]$AllowOutsideHome
     )
 
     $names = if ($PSCmdlet.ParameterSetName -eq 'Single') { @($CastleName) } else { @(Get-HomepsickNames) }
     foreach ($name in $names) {
         $castle = Get-HomepsickCastle -CastleName $name
+        if (-not $PSCmdlet.ShouldProcess($castle.CastlePath, 'Pull castle updates')) { continue }
+        $hadManifest = Test-HomepsickEntry (Join-Path $castle.CastlePath 'homepsick.json')
+        $beforePlan = if ($hadManifest) { Resolve-HomepsickLinkPlan -RepositoryPath $castle.CastlePath }
         $before = (Invoke-HomepsickGit -RepositoryPath $castle.CastlePath -Arguments @('rev-parse', 'HEAD') -AllowFailure).Output.Trim()
         $castle.Update()
         $after = (Invoke-HomepsickGit -RepositoryPath $castle.CastlePath -Arguments @('rev-parse', 'HEAD') -AllowFailure).Output.Trim()
-        $newFiles = if ($before -and $after -and $before -ne $after) {
+        $hasManifest = Test-HomepsickEntry (Join-Path $castle.CastlePath 'homepsick.json')
+        $newFiles = if ($before -and $after -and $before -ne $after -and ($hadManifest -or $hasManifest)) {
+            $afterPlan = Resolve-HomepsickLinkPlan -RepositoryPath $castle.CastlePath
+            $selectedRoots = @(@($beforePlan.Entries) + @($afterPlan.Entries) | Where-Object Selected | Select-Object -ExpandProperty Source -Unique)
+            $changes = (Invoke-HomepsickGit -RepositoryPath $castle.CastlePath -Arguments @('diff', '--name-only', '-z', $before, $after)).Output -split "`0"
+            @($changes | Where-Object {
+                $changedPath = $_
+                $changedPath -eq 'homepsick.json' -or @($selectedRoots | Where-Object {
+                    $changedPath -eq $_ -or $changedPath.StartsWith($_ + '/', [StringComparison]::Ordinal)
+                }).Count -gt 0
+            }).Count -gt 0
+        }
+        elseif ($before -and $after -and $before -ne $after) {
             (Invoke-HomepsickGit -RepositoryPath $castle.CastlePath -Arguments @('diff', '--name-only', '--diff-filter=AR', $before, $after, '--', 'home')).Output
         }
-        if ($newFiles -and (Test-Path -LiteralPath $castle.CastleSymRoot -PathType Container)) {
-            if ($Link) { Enable-HomepsickCastle -CastleName $name -Batch:$Batch }
+        if ($newFiles -and ($hadManifest -or $hasManifest -or (Test-Path -LiteralPath $castle.CastleSymRoot -PathType Container))) {
+            if ($Link) { Enable-HomepsickCastle -CastleName $name -Batch:$Batch -AllowOutsideHome:$AllowOutsideHome }
             elseif (-not $Batch -and $PSCmdlet.ShouldContinue("Link new files from '$name'?", 'Castle updated')) {
-                Enable-HomepsickCastle -CastleName $name
+                Enable-HomepsickCastle -CastleName $name -AllowOutsideHome:$AllowOutsideHome
             }
         }
     }

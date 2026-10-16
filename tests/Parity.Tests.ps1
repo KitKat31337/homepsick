@@ -1,8 +1,11 @@
+# Preserves the ordinary no-manifest castle lifecycle using real local Git
+# repositories, submodules, and links as the compatibility baseline.
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../src/Homepsick.psm1') -Force
     $script:previousHome = $env:HOME
 
     function New-TestSource {
+        # Seed a local ordinary castle remote without any manifest feature enabled.
         param([string]$Path)
         & git init --initial-branch=main $Path | Out-Null
         & git -C $Path config user.email 'tests@example.invalid'
@@ -16,6 +19,8 @@ BeforeAll {
 
 AfterAll { $env:HOME = $script:previousHome }
 
+# Each test overrides HOME into TestDrive and restores it after the suite;
+# the developer's actual castle storage and home links are never fixture targets.
 Describe 'Castle lifecycle' {
 BeforeEach {
     $env:HOME = Join-Path $TestDrive 'user'

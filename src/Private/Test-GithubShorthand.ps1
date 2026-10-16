@@ -1,4 +1,5 @@
 function Test-GithubShorthand {
+    # Returns whether text has the supported owner/repo GitHub shorthand form.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
